@@ -36,6 +36,7 @@ const WORKLOADS = [
   ["add", `add() ${SIZES.add} times on one hot key`],
   ["bulk-loop", `bulk insert ${SIZES.bulk} keys with a set() loop`],
   ["bulk-tx", `bulk insert ${SIZES.bulk} keys in one transaction (Depo only: the others have no transaction API)`],
+  ["all", `all() over ${SIZES.coldKeys.toLocaleString("en-US")} keys, ${SIZES.allCalls} calls`],
 ];
 
 const version = (pkg) => JSON.parse(readFileSync(require.resolve(`${pkg}/package.json`), "utf8")).version;
@@ -116,6 +117,8 @@ async function main() {
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
   const results = {};
+  // Pre-built files with SIZES.coldKeys entries in each library's format, for `all` and cold start.
+  const templates = await prepareColdTemplates();
 
   for (const [workload] of WORKLOADS) {
     for (const [library] of LIBRARIES) {
@@ -124,6 +127,7 @@ async function main() {
       const samples = [];
       for (let run = 0; run < RUNS; run++) {
         const dir = freshDir(`${library}-${workload}-${run}`);
+        if (workload === "all") cpSync(templates[library], dir, { recursive: true });
         const sample = runWorker(library, workload, dir);
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
         if (sample.timedOut) {
@@ -139,7 +143,6 @@ async function main() {
     }
   }
 
-  const templates = await prepareColdTemplates();
   for (const [library] of LIBRARIES) {
     const samples = [];
     for (let run = 0; run < COLD_RUNS; run++) {

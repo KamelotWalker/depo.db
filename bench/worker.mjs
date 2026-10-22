@@ -17,6 +17,7 @@ export const SIZES = {
   add: 1000,
   bulk: 5000,
   coldKeys: 10_000,
+  allCalls: 20,
 };
 
 /** Deterministic PRNG so every library sees the same key sequence. */
@@ -45,6 +46,7 @@ async function open(name) {
         get: (k) => db.get(k),
         add: (k, n) => db.add(k, n),
         bulk: (n) => db.transaction(() => { for (let i = 0; i < n; i++) db.set(`user_${i}`, value(i)); }),
+        all: () => db.all(),
         close: () => db.close(),
       };
     }
@@ -57,6 +59,7 @@ async function open(name) {
         get: (k) => db.get(k),
         add: (k, n) => db.add(k, n),
         bulk: null,
+        all: () => db.all(),
         close: () => db.driver.close(),
       };
     }
@@ -70,6 +73,7 @@ async function open(name) {
         get: (k) => db.get(k),
         add: (k, n) => db.add(k, n),
         bulk: null,
+        all: () => db.all(),
         close: () => db.driver.database.close(),
       };
     }
@@ -83,6 +87,7 @@ async function open(name) {
         get: (k) => db.get(k),
         add: (k, n) => db.add(k, n),
         bulk: null,
+        all: () => db.all(),
         close: () => {},
       };
     }
@@ -137,6 +142,12 @@ async function main() {
     case "bulk-loop": {
       const ms = await loop(lib, SIZES.bulk, (i) => lib.set(`user_${i}`, value(i)));
       result = { ops: SIZES.bulk, ms };
+      break;
+    }
+    case "all": {
+      // Runs on a copy of the cold-start template (SIZES.coldKeys entries).
+      const ms = await loop(lib, SIZES.allCalls, () => lib.all());
+      result = { ops: SIZES.allCalls, ms };
       break;
     }
     case "bulk-tx": {

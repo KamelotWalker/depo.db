@@ -37,3 +37,15 @@ test("every entry point loads through the exports map in ESM and CJS", async () 
   }
   assert.throws(() => require("depo/dist/cjs/store.js"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 });
+
+test("loading the package prints no warnings (no ExperimentalWarning on Node >= 24.15)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  for (const code of ['require("depo")', 'require("depo/quickdb")', 'require("depo/wiodb")']) {
+    const run = spawnSync(process.execPath, ["-e", `${code}; new (require("depo").Depo)(":memory:").close()`], {
+      cwd: new URL("..", import.meta.url),
+      encoding: "utf8",
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stderr, "", `${code} wrote to stderr`);
+  }
+});
