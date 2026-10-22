@@ -174,6 +174,26 @@ test("importJson: false starts empty; databasePath rules follow wio.db", (t) => 
   assert.equal(nested.path, join(dir, "deeper", "more", "db.sqlite"));
 });
 
+test("lone surrogates: allowed in nested path segments like wio.db, rejected as top-level keys", (t) => {
+  const dir = tempDir(t);
+  const data = JSON.stringify({ obj: { "\ud800": 1, "\ud801": 2 } });
+  writeFileSync(join(dir, "real.json"), data);
+  writeFileSync(join(dir, "ours.json"), data);
+  const real = new Real.JsonDatabase({ databasePath: join(dir, "real.json") });
+  const ours = new JsonDatabase({ databasePath: join(dir, "ours.json") });
+  onCleanup(t, () => ours.close());
+  for (const db of [real, ours]) {
+    assert.equal(db.get("obj.\ud800"), 1);
+    assert.equal(db.set("obj.\ud801", 3), 3);
+    db.add("obj.\ud801", 1);
+    db.delete("obj.\ud800");
+    assert.deepEqual(db.get("obj"), { "\ud801": 4 });
+  }
+  // Only the SQLite row key must be well-formed (see compat-wiodb.md, difference 17).
+  assert.throws(() => ours.set("top_\ud800", 1), /lone UTF-16 surrogate/);
+  assert.throws(() => ours.set("top_\ud800.x", 1), /lone UTF-16 surrogate/);
+});
+
 test("intentional difference: math on a missing or zero value starts from 0", (t) => {
   const db = new JsonDatabase({ databasePath: join(tempDir(t), "db.json") });
   onCleanup(t, () => db.close());

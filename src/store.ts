@@ -1,5 +1,5 @@
 import { DepoError } from "./errors.js";
-import { Connection, type ConnectionOptions, type SqliteStatement } from "./sqlite.js";
+import { Connection, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "./sqlite.js";
 
 export const SCHEMA_VERSION = 1;
 
@@ -51,9 +51,9 @@ export class Store {
     try {
       // Opening an existing file takes no write lock: under heavy write traffic from other
       // processes a late opener would otherwise have to win the lock just to start.
-      const version = this.#conn.run(() => this.#readSchemaVersion());
+      const version = this.#conn.run(() => readSchemaVersion(db));
       if (version === undefined) this.#conn.transaction(() => this.#migrate());
-      else this.#checkVersion(version);
+      else checkVersion(path, version);
       this.#selectRow = db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
       this.#upsert = db.prepare(
         "INSERT INTO depo_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
@@ -89,22 +89,31 @@ export class Store {
     }
   }
 
-  /** Schema version when all of Depo's tables exist, else `undefined`. */
-  #readSchemaVersion(): number | undefined {
-    const db = this.#conn.db;
-    const objects = db
-      .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_meta', 'depo_entries', 'depo_entries_expires_at')")
-      .get();
-    if (Number(objects?.["n"]) !== 3) return undefined;
-    const row = db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
-    return row === undefined ? undefined : Number(row["value"]);
-  }
-
-  #checkVersion(version: number): void {
-    if (version > SCHEMA_VERSION) {
-      throw new DepoError(
-        `${this.path} uses Depo schema version ${version}; this version of Depo only understands ${SCHEMA_VERSION}. Upgrade Depo.`,
+  /**
+   * Copies the live entries of `namespaces` from the Depo file at `path` into
+   * this store. The file is read in one snapshot through a read-only
+   * connection, which never writes the main file or the WAL and never
+   * checkpoints. A file without Depo's schema has nothing to copy.
+   */
+  copyLiveFrom(path: string, options: ConnectionOptions, namespaces: Iterable<string>, now: number): void {
+    const source = new Connection(path, { ...options, readOnly: true });
+    try {
+      source.db.exec("BEGIN");
+      const version = readSchemaVersion(source.db);
+      if (version === undefined) return;
+      checkVersion(path, version);
+      const select = source.db.prepare(
+        "SELECT key, value, expires_at FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
+      this.transaction(() => {
+        for (const ns of new Set(namespaces)) {
+          for (const row of select.iterate(ns, now)) {
+            this.#upsert.run(ns, String(row["key"]), String(row["value"]), row["expires_at"] ?? null);
+          }
+        }
+      });
+    } finally {
+      source.close();
     }
   }
 
@@ -123,13 +132,13 @@ export class Store {
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
     `);
-    const version = this.#readSchemaVersion();
+    const version = readSchemaVersion(this.#conn.db);
     if (version === undefined) {
       this.#conn.db
         .prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)")
         .run(String(SCHEMA_VERSION));
     } else {
-      this.#checkVersion(version);
+      checkVersion(this.path, version);
     }
   }
 
@@ -218,6 +227,24 @@ export class Store {
   setExpiry(ns: string, key: string, expiresAt: number | null, now: number): boolean {
     assertNames(ns, key);
     return Number(this.#run(() => this.#setExpiry.run(expiresAt, ns, key, now)).changes) > 0;
+  }
+}
+
+/** Schema version when all of Depo's tables exist, else `undefined`. */
+function readSchemaVersion(db: SqliteDatabase): number | undefined {
+  const objects = db
+    .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_meta', 'depo_entries', 'depo_entries_expires_at')")
+    .get();
+  if (Number(objects?.["n"]) !== 3) return undefined;
+  const row = db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
+  return row === undefined ? undefined : Number(row["value"]);
+}
+
+function checkVersion(path: string, version: number): void {
+  if (version > SCHEMA_VERSION) {
+    throw new DepoError(
+      `${path} uses Depo schema version ${version}; this version of Depo only understands ${SCHEMA_VERSION}. Upgrade Depo.`,
+    );
   }
 }
 

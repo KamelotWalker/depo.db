@@ -117,9 +117,13 @@ export class JsonDatabase<V> {
     return { size: this.size, version: VERSION };
   }
 
-  /** Splits a wio.db key into the top-level key and the lodash path below it. */
+  /**
+   * Splits a wio.db key into the top-level key and the lodash path below it.
+   * A key with a lone surrogate can never be a stored row (Depo rejects such row
+   * keys), so it is not probed as one; its surrogate may sit in a JSON-only segment.
+   */
   #resolve(key: string): [string, string[]] {
-    if (!isDeepPath(key) || this.#store.read(NS, key, Date.now()) !== undefined) return [key, []];
+    if (!isDeepPath(key) || (key.isWellFormed() && this.#store.read(NS, key, Date.now()) !== undefined)) return [key, []];
     const [first, ...rest] = stringToPath(key);
     return first === undefined ? [key, []] : [first, rest];
   }

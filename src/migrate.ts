@@ -249,14 +249,24 @@ export function runMigration(options: MigrationOptions): MigrationReport {
       ? readQuickDb(source, options.tables)
       : [format === "croxydb" ? readCroxyJson(source, namespace, now) : readWioJson(source, namespace)];
 
-  // A dry run against a target that does not exist yet must not create it; an empty in-memory store is equivalent.
-  // Against an existing target it runs in preview mode: opening the store (schema creation, expired-row purge)
-  // and the import all happen inside one transaction that close() rolls back.
   const dryRun = options.dryRun ?? false;
-  const storePath = dryRun && !existsSync(target) ? ":memory:" : target;
-  const store = new Store(storePath, options.connection ?? {}, dryRun);
+  const connection = options.connection ?? {};
+  const targetExists = existsSync(target);
+  const hasSidecars = existsSync(`${target}-wal`) || existsSync(`${target}-shm`);
+  // Dry runs never change the target:
+  // - missing target: an empty in-memory store stands in, so the file is not created;
+  // - target with a -wal/-shm (another process has it open, or a writer exited without closing): its live
+  //   entries are copied into an in-memory store through a read-only connection. A writable connection would
+  //   checkpoint the WAL into the main file when it closes as the last connection;
+  // - otherwise: preview mode, where opening (schema creation, expired-row purge) and the import run in one
+  //   transaction that close() rolls back. Unlike a read-only connection it leaves no -wal/-shm behind.
+  const preview = dryRun && targetExists && !hasSidecars;
+  const store = new Store(dryRun && !preview ? ":memory:" : target, connection, preview);
   const reports: GroupReport[] = [];
   try {
+    if (dryRun && targetExists && hasSidecars) {
+      store.copyLiveFrom(target, connection, groups.map((group) => group.namespace), now);
+    }
     store.transaction(() => {
       for (const group of groups) {
         const stats = importEntries(store, group.namespace, group.entries, options.overwrite ?? false, now);

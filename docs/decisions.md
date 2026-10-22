@@ -60,7 +60,8 @@ Rejected: SQLite JSONB, `v8.serialize`, structured clone.
   and `"a\uD801"` would address the same row and overwrite each other. The
   check sits in the storage layer, so the wio.db layer and `migrate` get it
   too. Path segments after the first are unaffected: they live inside the
-  JSON value, which escapes surrogates losslessly. Rejected: a lossless
+  JSON value, which escapes surrogates losslessly (also in `depo/wiodb`, whose
+  `get("obj.\uD800")` works like wio.db's). Rejected: a lossless
   encoding of such keys. Other readers of the file (SQLite tools, older Depo
   versions) would see the encoded form, and a lone surrogate in a key is
   almost always a bug, such as a string cut in the middle of an emoji.
@@ -205,11 +206,22 @@ promise settles.
   conflicts unless `--overwrite` is given. The safe default never destroys data
   written after a first migration.
 - The whole import is one transaction. `--dry-run` does not create a missing
-  target file (an empty in-memory database stands in). An existing target is
-  opened in preview mode: one transaction covers everything from opening
-  (schema creation, the expired-row purge) to the import and is rolled back
-  on close, and the journal mode is not switched to WAL, so the file stays
-  byte-for-byte unchanged.
+  target file (an empty in-memory database stands in). An existing target's
+  main file and `-wal` stay byte-for-byte unchanged:
+  - Without `-wal`/`-shm` files (no process has it open) it is opened in
+    preview mode: one transaction covers everything from opening (schema
+    creation, the expired-row purge) to the import and is rolled back on
+    close, and the journal mode is not switched to WAL. Closing deletes the
+    `-wal`/`-shm` files it created, as any last connection does.
+  - With them (a process has it open, or a writer exited without closing)
+    a writable connection would checkpoint the WAL into the main file when
+    it closes as the last connection. The live entries of the affected
+    namespaces are instead copied into an in-memory database through a
+    read-only connection, which never writes the main file or the WAL and
+    takes no write lock. Like every reader it may update the `-shm` file,
+    SQLite's shared-memory index of the WAL (read marks, or rebuilding it
+    after a writer crashed); it holds no data and SQLite rebuilds it from
+    the WAL.
 - quick.db tables are recognised by their layout (`ID` and `json` columns).
   Only SQLite's reserved `sqlite_` names are skipped; the `_` is escaped in
   the `LIKE` pattern, where it would otherwise match any character and also

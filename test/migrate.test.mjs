@@ -4,9 +4,10 @@ import { copyFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "n
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { Depo } from "../dist/esm/index.js";
 import { readCroxyJson, runMigration } from "../dist/esm/migrate.js";
-import { CLI, FIXTURES, sleep, tempDir } from "./helpers.mjs";
+import { CLI, FIXTURES, ROOT, sleep, tempDir } from "./helpers.mjs";
 
 function depo(...args) {
   const result = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
@@ -125,6 +126,41 @@ test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) =>
     ],
   );
   check.close();
+});
+
+test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchanged", async (t) => {
+  const dir = tempDir(t);
+  const target = join(dir, "depo.sqlite");
+  // A writer that exits without close() leaves its committed changes in the -wal file only.
+  const writer = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { Depo } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist", "esm", "index.js")).href)};
+       const db = new Depo(process.argv[1]);
+       db.set("existing", 42);
+       db.set("expired", 1, { ttl: 1 });
+       process.exit(0);`,
+      target,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(writer.status, 0, writer.stderr);
+  await sleep(20);
+  const source = join(dir, "source.json");
+  writeFileSync(source, JSON.stringify({ existing: 42, expired: 2, fresh: 1 }));
+  const before = readFileSync(target);
+  const walBefore = readFileSync(`${target}-wal`);
+  assert.ok(walBefore.length > 0);
+
+  const report = migrateJson(source, "--to", target, "--dry-run");
+  assert.equal(report.dryRun, true);
+  // The committed WAL content is seen: "existing" is unchanged, the expired entry counts as missing.
+  assert.deepEqual(report.total, { read: 3, inserted: 2, updated: 0, unchanged: 1, conflicts: 0 });
+  assert.ok(before.equals(readFileSync(target)), "main file unchanged");
+  assert.ok(walBefore.equals(readFileSync(`${target}-wal`)), "-wal unchanged (not checkpointed)");
+  assert.equal(readAll(target).existing, 42);
 });
 
 test("quick.db SQLite: auto-detected, every table imported, json → default", (t) => {
