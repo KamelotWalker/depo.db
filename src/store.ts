@@ -40,9 +40,13 @@ export class Store {
   readonly #selectMeta: SqliteStatement;
   readonly #upsertMeta: SqliteStatement;
 
-  constructor(path: string, options: ConnectionOptions) {
+  /**
+   * @param preview Dry run: every change, including schema creation and the
+   * startup purge, stays in one transaction that `close()` rolls back.
+   */
+  constructor(path: string, options: ConnectionOptions, preview = false) {
     this.path = path;
-    this.#conn = new Connection(path, options);
+    this.#conn = new Connection(path, options, preview);
     const db = this.#conn.db;
     try {
       // Opening an existing file takes no write lock: under heavy write traffic from other
@@ -162,6 +166,7 @@ export class Store {
 
   /** Returns the live (non-expired) row, or `undefined`. */
   read(ns: string, key: string, now: number): Row | undefined {
+    assertNames(ns, key);
     const row = this.#run(() => this.#selectRow.get(ns, key));
     if (row === undefined) return undefined;
     const value = row["value"];
@@ -174,14 +179,18 @@ export class Store {
   }
 
   write(ns: string, key: string, json: string, expiresAt: number | null): void {
+    assertNames(ns, key);
     this.#run(() => this.#upsert.run(ns, key, json, expiresAt));
   }
 
   deleteLive(ns: string, key: string, now: number): boolean {
+    assertNames(ns, key);
     return Number(this.#run(() => this.#deleteLive.run(ns, key, now)).changes) > 0;
   }
 
   list(ns: string, now: number, prefix: string, limit: number): RawEntry[] {
+    assertWellFormed("Namespace", ns);
+    assertWellFormed("Prefix", prefix);
     const rows = this.#run(() =>
       prefix === ""
         ? this.#selectAll.all(ns, now, limit)
@@ -191,11 +200,13 @@ export class Store {
   }
 
   count(ns: string, now: number): number {
+    assertWellFormed("Namespace", ns);
     const row = this.#run(() => this.#countLive.get(ns, now));
     return Number(row?.["n"] ?? 0);
   }
 
   deleteNamespace(ns: string): void {
+    assertWellFormed("Namespace", ns);
     this.#run(() => this.#deleteNamespace.run(ns));
   }
 
@@ -205,8 +216,27 @@ export class Store {
   }
 
   setExpiry(ns: string, key: string, expiresAt: number | null, now: number): boolean {
+    assertNames(ns, key);
     return Number(this.#run(() => this.#setExpiry.run(expiresAt, ns, key, now)).changes) > 0;
   }
+}
+
+/**
+ * Throws for a string containing a lone UTF-16 surrogate. SQLite stores TEXT as
+ * UTF-8, which cannot represent one: it would be replaced by U+FFFD, so distinct
+ * keys (or namespaces) would silently address the same row.
+ */
+export function assertWellFormed(what: string, name: string): void {
+  if (!name.isWellFormed()) {
+    throw new DepoError(
+      `${what} ${JSON.stringify(name)} contains a lone UTF-16 surrogate; SQLite cannot store it without merging it with other names`,
+    );
+  }
+}
+
+function assertNames(ns: string, key: string): void {
+  assertWellFormed("Namespace", ns);
+  assertWellFormed("Key", key);
 }
 
 /**

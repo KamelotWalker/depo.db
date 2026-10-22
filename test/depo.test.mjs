@@ -130,6 +130,31 @@ test("invalid keys are rejected", (t) => {
   assert.throws(() => db.get(5), DepoError);
 });
 
+test("keys and namespaces with lone UTF-16 surrogates are rejected instead of colliding", (t) => {
+  const db = open(t);
+  // SQLite stores TEXT as UTF-8 and would turn both into "…\uFFFD", addressing the same row.
+  const first = "tenant_\ud800";
+  const second = "tenant_\ud801";
+  assert.throws(() => db.table(first), /lone UTF-16 surrogate/);
+  assert.throws(() => new Depo(db.path, { namespace: second }), /lone UTF-16 surrogate/);
+  for (const key of ["key_\ud800", ["key_\udc00", "path"], "key_\ud801.path"]) {
+    assert.throws(() => db.set(key, 1), /lone UTF-16 surrogate/, `set ${JSON.stringify(key)}`);
+    assert.throws(() => db.get(key), /lone UTF-16 surrogate/, `get ${JSON.stringify(key)}`);
+    assert.throws(() => db.add(key, 1), /lone UTF-16 surrogate/);
+    assert.throws(() => db.push(key, 1), /lone UTF-16 surrogate/);
+    assert.throws(() => db.delete(key), /lone UTF-16 surrogate/);
+  }
+  assert.throws(() => db.expire("key_\ud800", 1000), /lone UTF-16 surrogate/);
+  assert.throws(() => db.all({ prefix: "key_\ud800" }), /lone UTF-16 surrogate/);
+  assert.equal(db.count(), 0);
+  // Well-formed text (surrogate pairs included) is unaffected, and so are path segments, which live in JSON.
+  db.set("emoji_😀", 1);
+  db.set(["obj", "\ud800"], 1);
+  db.set(["obj", "\ud801"], 2);
+  assert.equal(db.get("emoji_😀"), 1);
+  assert.deepEqual(db.get("obj"), { "\ud800": 1, "\ud801": 2 });
+});
+
 test("__proto__ and inherited names are plain data", (t) => {
   const db = open(t);
   db.set("obj.__proto__.polluted", true);
@@ -150,6 +175,16 @@ test("unsupported values are rejected before writing", (t) => {
   assert.throws(() => db.set("b", 10n), /not JSON-serializable/);
   assert.throws(() => db.push("l", undefined), /undefined/);
   assert.equal(db.count(), 0);
+  // Path writes and push embed the value in an entry, where JSON.stringify would drop a function or turn a symbol into null.
+  db.set("obj", { balance: 100 });
+  db.set("arr", [1]);
+  assert.throws(() => db.set("obj.balance", () => 1), /Cannot store a function at obj\.balance/);
+  assert.throws(() => db.set(["obj", "s"], Symbol("x")), /Cannot store a symbol/);
+  assert.throws(() => db.push("arr", Symbol("x")), /Cannot store a symbol at arr/);
+  assert.throws(() => db.push("arr", 2, () => 1), /Cannot store a function/);
+  assert.throws(() => db.set("s", Symbol("x")), /not JSON-serializable/);
+  assert.deepEqual(db.get("obj"), { balance: 100 });
+  assert.deepEqual(db.get("arr"), [1]);
   // JSON semantics: Dates become strings.
   db.set("d", new Date(0));
   assert.equal(db.get("d"), "1970-01-01T00:00:00.000Z");

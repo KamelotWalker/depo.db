@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DepoError } from "./errors.js";
 import { deleteIn, formatKey, getIn, parseKey, setIn, typeName, type Key } from "./path.js";
 import type { ConnectionOptions } from "./sqlite.js";
-import { Store } from "./store.js";
+import { assertWellFormed, Store } from "./store.js";
 
 export interface DepoOptions extends ConnectionOptions {
   /** Namespace used by this instance. Default `"default"`. See {@link Depo.table}. */
@@ -298,11 +298,22 @@ function assertNamespace(namespace: string): void {
   if (typeof namespace !== "string" || namespace.length === 0) {
     throw new DepoError("namespace must be a non-empty string");
   }
+  assertWellFormed("Namespace", namespace);
 }
 
+/**
+ * Rejects values JSON cannot represent. Checked before the value is embedded in
+ * an entry (path `set`, `push`), where `JSON.stringify` would silently drop a
+ * function or symbol property or turn it into `null` instead of failing.
+ */
 function assertValue(value: unknown, key: Key): void {
   if (value === undefined) {
     throw new DepoError(`Cannot store undefined at ${typeof key === "string" ? key : formatKey(key)}; use delete() instead`);
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    throw new DepoError(
+      `Cannot store a ${typeof value} at ${typeof key === "string" ? key : formatKey(key)}: not JSON-serializable`,
+    );
   }
 }
 

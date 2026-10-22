@@ -160,8 +160,9 @@ export function readQuickDb(file: string, tables?: readonly string[]): SourceGro
   try {
     // One read transaction: every table is read from the same snapshot even if a quick.db process is writing.
     db.exec("BEGIN");
+    // `_` is a LIKE wildcard: escape it so only SQLite's reserved `sqlite_` prefix is excluded, not e.g. `sqliteData`.
     const available = db
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name")
       .all()
       .map((row) => String(row["name"]))
       .filter((name) => {
@@ -229,8 +230,6 @@ export function importEntries(
   return stats;
 }
 
-class DryRunRollback extends Error {}
-
 /** Imports a wio.db / croxydb JSON file or a quick.db SQLite file into a Depo file. Idempotent. */
 export function runMigration(options: MigrationOptions): MigrationReport {
   const source = options.source;
@@ -251,21 +250,19 @@ export function runMigration(options: MigrationOptions): MigrationReport {
       : [format === "croxydb" ? readCroxyJson(source, namespace, now) : readWioJson(source, namespace)];
 
   // A dry run against a target that does not exist yet must not create it; an empty in-memory store is equivalent.
-  const storePath = options.dryRun && !existsSync(target) ? ":memory:" : target;
-  const store = new Store(storePath, options.connection ?? {});
+  // Against an existing target it runs in preview mode: opening the store (schema creation, expired-row purge)
+  // and the import all happen inside one transaction that close() rolls back.
+  const dryRun = options.dryRun ?? false;
+  const storePath = dryRun && !existsSync(target) ? ":memory:" : target;
+  const store = new Store(storePath, options.connection ?? {}, dryRun);
   const reports: GroupReport[] = [];
   try {
-    try {
-      store.transaction(() => {
-        for (const group of groups) {
-          const stats = importEntries(store, group.namespace, group.entries, options.overwrite ?? false, now);
-          reports.push({ origin: group.origin, namespace: group.namespace, warnings: group.warnings, ...stats });
-        }
-        if (options.dryRun) throw new DryRunRollback();
-      });
-    } catch (error) {
-      if (!(error instanceof DryRunRollback)) throw error;
-    }
+    store.transaction(() => {
+      for (const group of groups) {
+        const stats = importEntries(store, group.namespace, group.entries, options.overwrite ?? false, now);
+        reports.push({ origin: group.origin, namespace: group.namespace, warnings: group.warnings, ...stats });
+      }
+    });
   } finally {
     store.close();
   }
@@ -278,5 +275,5 @@ export function runMigration(options: MigrationOptions): MigrationReport {
     total.unchanged += report.unchanged;
     total.conflicts += report.conflicts;
   }
-  return { source, format, target, dryRun: options.dryRun ?? false, groups: reports, total };
+  return { source, format, target, dryRun, groups: reports, total };
 }

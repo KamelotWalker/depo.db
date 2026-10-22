@@ -112,6 +112,9 @@ db.get(`${escapeKey("site.com")}.visits`);
   `set("list.3", x)` (index ≤ length), `delete("list.0")` splices.
 - Writing a path through a non-object (`set("coins.x", 1)` when `coins` is `5`)
   throws instead of replacing the value.
+- Entry keys (the first segment) and namespaces must be well-formed Unicode. A
+  lone UTF-16 surrogate such as `"a\uD800"` throws `DepoError`: SQLite stores
+  text as UTF-8, where it would become U+FFFD and merge with other keys.
 
 Rationale: [decisions §3–4](docs/decisions.md#3-keys-dots-are-paths-backslash-escapes).
 
@@ -120,7 +123,9 @@ Rationale: [decisions §3–4](docs/decisions.md#3-keys-dots-are-paths-backslash
 Values are stored as JSON: objects, arrays, strings, numbers, booleans, `null`.
 
 - `undefined`, functions, symbols and `BigInt` throw `DepoError` (use `delete()`
-  instead of storing `undefined`).
+  instead of storing `undefined`), also as the value of a path `set` or `push`.
+  Nested inside an object or array, functions and symbols follow plain
+  `JSON.stringify` rules (properties dropped, array elements `null`).
 - `Date` becomes an ISO string; `NaN` and `Infinity` become `null`.
 - `get()` returns a fresh copy; changing it does not change the database.
 - `add` throws on non-numbers; `push`/`pull` throw on non-arrays.
@@ -201,7 +206,8 @@ Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 ```
 
 - wio.db / croxydb: every top-level key becomes an entry in the namespace given
-  by `--namespace` (default `default`).
+  by `--namespace` (default `default`). A key with a lone UTF-16 surrogate
+  ([Keys](#keys)) fails the migration; nothing is written.
 - quick.db: table `json` goes to namespace `default`, any other table (from
   `db.table("economy")`) to the namespace of the same name. `--table` limits
   which tables are read. The source is opened read-only.
@@ -209,8 +215,8 @@ Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
   top-level keys. Encrypted croxydb files must be decrypted first.
 - **Safe to run again**: identical entries count as `unchanged`. Entries that
   already exist with a different value are kept and reported as `conflicts`;
-  `--overwrite` replaces them. `--dry-run` shows the report without writing,
-  `--json` prints it as JSON.
+  `--overwrite` replaces them. `--dry-run` shows the report and leaves the
+  target file unchanged, `--json` prints it as JSON.
 
 ## Benchmark
 

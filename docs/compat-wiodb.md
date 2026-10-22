@@ -72,6 +72,7 @@ at every step (list results compared after sorting, see difference 4).
 | 14 | `findAndDelete` deletes one key at a time | All deletions in one transaction | Atomicity |
 | 15 | `pull()` is typed as returning `V` | Typed `V \| false` (it returns `false` in both libraries) | Honest types |
 | 16 | — | `close()` added; `busyTimeout`, `synchronous`, `importJson` options added | |
+| 17 | Top-level keys containing a lone UTF-16 surrogate (`"a\uD800"`) are stored (JSON escapes them) | Throw `DepoError`; a wio.db JSON file with such a key is not imported | SQLite stores UTF-8, where such keys would merge and overwrite each other |
 
 ## Not supported
 

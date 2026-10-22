@@ -51,16 +51,17 @@ function isBusy(error: unknown): boolean {
  * only wakes every 100 ms rarely finds the lock free and can starve for
  * seconds. Polling every ~1-2 ms (with jitter) keeps waits short.
  * Only use for operations that change nothing when they fail with SQLITE_BUSY.
+ * The deadline uses the monotonic clock: a wall-clock adjustment must not stretch or cut the wait.
  */
 function retryBusy<T>(fn: () => T, timeoutMs: number): T {
-  let deadline = 0;
+  let deadline: number | undefined;
   for (;;) {
     try {
       return fn();
     } catch (error) {
       if (!isBusy(error)) throw error;
-      const now = Date.now();
-      if (deadline === 0) deadline = now + timeoutMs;
+      const now = performance.now();
+      deadline ??= now + timeoutMs;
       if (now >= deadline) throw error;
       Atomics.wait(sleepCell, 0, 0, 1 + Math.random());
     }
@@ -85,7 +86,12 @@ export class Connection {
   readonly #rollback: SqliteStatement;
   #depth = 0;
 
-  constructor(path: string, options: ConnectionOptions = {}) {
+  /**
+   * @param preview Dry-run mode: the journal mode is left unchanged and
+   * everything runs inside one immediate transaction that `close()` rolls back,
+   * so nothing done through this connection reaches the file.
+   */
+  constructor(path: string, options: ConnectionOptions = {}, preview = false) {
     const busyTimeout = options.busyTimeout ?? DEFAULT_BUSY_TIMEOUT;
     if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
       throw new DepoError("busyTimeout must be a non-negative integer (milliseconds)");
@@ -101,7 +107,7 @@ export class Connection {
     // write lock and keep SQLite's handler.
     this.db = new DatabaseClass(path, { readOnly, timeout: readOnly ? busyTimeout : 0 });
     try {
-      if (!readOnly && path !== ":memory:" && path !== "") {
+      if (!readOnly && !preview && path !== ":memory:" && path !== "") {
         // Changing the journal mode needs an exclusive lock; retried when several processes open a new file at once.
         retryBusy(() => {
           const row = this.db.prepare("PRAGMA journal_mode").get();
@@ -112,6 +118,10 @@ export class Connection {
       this.#begin = this.db.prepare("BEGIN IMMEDIATE");
       this.#commit = this.db.prepare("COMMIT");
       this.#rollback = this.db.prepare("ROLLBACK");
+      if (preview) {
+        retryBusy(() => this.#begin.run(), busyTimeout);
+        this.#depth = 1;
+      }
     } catch (error) {
       this.db.close();
       throw error;
@@ -167,7 +177,9 @@ export class Connection {
     return result;
   }
 
+  /** Closes the connection; an open transaction (always the case in preview mode) is rolled back. */
   close(): void {
+    if (this.db.isTransaction) this.#rollback.run();
     this.db.close();
   }
 }

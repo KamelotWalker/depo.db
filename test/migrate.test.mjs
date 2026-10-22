@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Depo } from "../dist/esm/index.js";
 import { readCroxyJson, runMigration } from "../dist/esm/migrate.js";
-import { CLI, FIXTURES, tempDir } from "./helpers.mjs";
+import { CLI, FIXTURES, sleep, tempDir } from "./helpers.mjs";
 
 function depo(...args) {
   const result = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
@@ -87,6 +88,45 @@ test("--dry-run reports without writing", (t) => {
   assert.equal(existsSync(target), false, "a dry run does not create the target");
 });
 
+test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) => {
+  const dir = tempDir(t);
+  const source = join(dir, "source.json");
+  writeFileSync(source, JSON.stringify({ fresh: 1, live: 2 }));
+  // A Depo target with an expired row: opening it normally purges that row.
+  const target = join(dir, "depo.sqlite");
+  const db = new Depo(target);
+  db.set("expired", 123, { ttl: 1 });
+  db.set("live", 456);
+  db.close();
+  await sleep(20);
+  // A foreign SQLite file (rollback journal, no Depo schema): a real run adds the schema and switches it to WAL.
+  const foreign = join(dir, "foreign.sqlite");
+  const raw = new DatabaseSync(foreign);
+  raw.exec("CREATE TABLE other (x); INSERT INTO other VALUES (1)");
+  raw.close();
+
+  for (const [file, total] of [
+    [target, { read: 2, inserted: 1, updated: 0, unchanged: 0, conflicts: 1 }],
+    [foreign, { read: 2, inserted: 2, updated: 0, unchanged: 0, conflicts: 0 }],
+  ]) {
+    const before = readFileSync(file);
+    const report = migrateJson(source, "--to", file, "--dry-run");
+    assert.equal(report.dryRun, true);
+    assert.deepEqual(report.total, total);
+    assert.ok(before.equals(readFileSync(file)), `${file} is unchanged`);
+    assert.equal(existsSync(`${file}-wal`), false, "no WAL file left behind");
+  }
+  const check = new DatabaseSync(target, { readOnly: true });
+  assert.deepEqual(
+    check.prepare("SELECT key, value FROM depo_entries ORDER BY key").all().map((row) => [row.key, row.value]),
+    [
+      ["expired", "123"],
+      ["live", "456"],
+    ],
+  );
+  check.close();
+});
+
 test("quick.db SQLite: auto-detected, every table imported, json → default", (t) => {
   const dir = tempDir(t);
   const source = join(dir, "json.sqlite");
@@ -133,6 +173,33 @@ test("quick.db SQLite: --table selects tables; unknown tables fail", (t) => {
   const misuse = depo("migrate", source, "--to", target, "--namespace", "x");
   assert.equal(misuse.code, 1);
   assert.match(misuse.stderr, /--namespace applies to JSON sources/);
+});
+
+test("quick.db SQLite: tables whose names only resemble sqlite_ are imported", (t) => {
+  const dir = tempDir(t);
+  const source = join(dir, "json.sqlite");
+  const raw = new DatabaseSync(source);
+  // quick.db's table layout. In LIKE, `_` matches any character, so 'sqlite_%' also matched these names.
+  for (const table of ["json", "sqliteData", "sqlite1"]) raw.exec(`CREATE TABLE ${table} (ID TEXT PRIMARY KEY, json TEXT)`);
+  raw.exec(
+    "INSERT INTO json VALUES ('ordinary', '1'); INSERT INTO sqliteData VALUES ('balance', '900'); INSERT INTO sqlite1 VALUES ('x', 'true')",
+  );
+  raw.close();
+  const target = join(dir, "depo.sqlite");
+
+  const report = migrateJson(source, "--to", target);
+  assert.deepEqual(
+    report.groups.map((g) => [g.origin, g.namespace, g.inserted]),
+    [
+      ["table json", "default", 1],
+      ["table sqlite1", "sqlite1", 1],
+      ["table sqliteData", "sqliteData", 1],
+    ],
+  );
+  assert.deepEqual(readAll(target, "sqliteData"), { balance: 900 });
+  assert.deepEqual(readAll(target, "sqlite1"), { x: true });
+  const selected = migrateJson(source, "--to", join(dir, "selected.sqlite"), "--table", "sqliteData");
+  assert.deepEqual(selected.groups.map((g) => g.namespace), ["sqliteData"]);
 });
 
 test("croxydb JSON: same layout as wio.db; TTL sidecar carried over for top-level keys", (t) => {

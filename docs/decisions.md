@@ -37,6 +37,11 @@ Rejected: SQLite JSONB, `v8.serialize`, structured clone.
 - Consequences, all documented in the README: `undefined`, functions, symbols
   and BigInt are rejected with `DepoError`; `Date` becomes an ISO string;
   `NaN`/`Infinity` become `null` (plain `JSON.stringify` behaviour).
+- The value passed to a path `set` or to `push` is checked *before* it is
+  embedded in the entry: once inside an object or array, `JSON.stringify` would
+  silently drop a function or symbol property or store `null` for it, so the
+  call would succeed while losing or changing data. Functions and symbols
+  nested deeper inside a stored object follow plain `JSON.stringify` rules.
 - `get()` returns a freshly parsed value; mutating it never changes the store.
 
 ## 3. Keys: dots are paths, backslash escapes
@@ -49,6 +54,16 @@ Rejected: SQLite JSONB, `v8.serialize`, structured clone.
   escapes a single segment for string keys.
 - The *first segment is the SQLite row*. Only that part is indexed; paths are
   resolved in JavaScript after reading the row.
+- Entry keys (the first segment) and namespaces must be well-formed Unicode: a
+  lone UTF-16 surrogate (`"a\uD800"`) throws `DepoError`. SQLite stores text as
+  UTF-8, which has no encoding for it and substitutes U+FFFD, so `"a\uD800"`
+  and `"a\uD801"` would address the same row and overwrite each other. The
+  check sits in the storage layer, so the wio.db layer and `migrate` get it
+  too. Path segments after the first are unaffected: they live inside the
+  JSON value, which escapes surrogates losslessly. Rejected: a lossless
+  encoding of such keys. Other readers of the file (SQLite tools, older Depo
+  versions) would see the encoded form, and a lone surrogate in a key is
+  almost always a bug, such as a string cut in the middle of an emoji.
 
 Rejected: lodash path syntax (`a[0].b`) in the native API. It has two ways to
 say the same thing and no escape for a literal `.` or `[`. The compatibility
@@ -107,6 +122,9 @@ synchronous core.
   most workers' worst case was 0.4–1.6 s). Only operations that change nothing
   when they fail with `SQLITE_BUSY` are retried (`BEGIN IMMEDIATE`, `COMMIT`,
   single statements outside a transaction), never user callbacks.
+  The deadline is measured on the monotonic clock (`performance.now()`), so a
+  system clock change during a wait neither stretches nor cuts it (TTLs, by
+  contrast, are wall-clock times, see §9).
 - This is still not a fair queue. Several processes writing flat out can make one
   of them wait seconds; such setups should raise `busyTimeout`. A Discord bot
   with a few writes per second per process is nowhere near this.
@@ -186,8 +204,16 @@ promise settles.
 - Entries present with a *different* value are **kept** and reported as
   conflicts unless `--overwrite` is given. The safe default never destroys data
   written after a first migration.
-- The whole import is one transaction. `--dry-run` rolls it back (and does not
-  create a missing target file).
+- The whole import is one transaction. `--dry-run` does not create a missing
+  target file (an empty in-memory database stands in). An existing target is
+  opened in preview mode: one transaction covers everything from opening
+  (schema creation, the expired-row purge) to the import and is rolled back
+  on close, and the journal mode is not switched to WAL, so the file stays
+  byte-for-byte unchanged.
+- quick.db tables are recognised by their layout (`ID` and `json` columns).
+  Only SQLite's reserved `sqlite_` names are skipped; the `_` is escaped in
+  the `LIKE` pattern, where it would otherwise match any character and also
+  skip tables such as `sqliteData`.
 - quick.db sources are opened read-only and read inside one read transaction,
   so all tables come from one snapshot even if the bot is still running.
 - croxydb's `jsondb` format turned out to be the same layout as wio.db (verified
