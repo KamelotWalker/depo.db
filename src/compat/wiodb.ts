@@ -95,6 +95,8 @@ export class JsonDatabase<V> {
   /** Imports the wio.db JSON file into an empty database, once per SQLite file. Race-free across processes. */
   #importOnce(importJson: boolean): void {
     const store = this.#store;
+    // Fast path without a write lock; re-checked inside the transaction.
+    if (store.getMeta(IMPORT_META_KEY) !== undefined) return;
     store.transaction(() => {
       if (store.getMeta(IMPORT_META_KEY) !== undefined) return;
       let imported = 0;

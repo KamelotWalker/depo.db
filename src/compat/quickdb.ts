@@ -8,7 +8,7 @@
  * quick.db file keeps working without conversion, and the file stays readable
  * by quick.db. Differences from quick.db 9.1.7 are listed in docs/compat-quickdb.md.
  */
-import { openConnection, quoteIdentifier, Transactor, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "../sqlite.js";
+import { Connection, quoteIdentifier, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "../sqlite.js";
 import { castPath, lodashGet, lodashSet, lodashUnset } from "./lodash-path.js";
 
 export interface IQuickDBOptions {
@@ -30,17 +30,15 @@ interface TableStatements {
 /** quick.db's `SqliteDriver`, implemented on node:sqlite instead of better-sqlite3. */
 export class SqliteDriver {
   private static instance: SqliteDriver | null = null;
-  readonly #db: SqliteDatabase;
-  readonly #tx: Transactor;
+  readonly #conn: Connection;
   readonly #tables = new Map<string, TableStatements>();
 
   get database(): SqliteDatabase {
-    return this.#db;
+    return this.#conn.db;
   }
 
   constructor(path: string, options: ConnectionOptions = {}) {
-    this.#db = openConnection(path, options);
-    this.#tx = new Transactor(this.#db);
+    this.#conn = new Connection(path, options);
   }
 
   static createSingleton(path: string): SqliteDriver {
@@ -75,22 +73,25 @@ export class SqliteDriver {
 
   /** Closes the connection (not part of quick.db's driver API). */
   close(): void {
-    this.#db.close();
+    this.#conn.close();
   }
 
   /** @internal */
   prepareSync(table: string): void {
     if (this.#tables.has(table)) return;
     const name = quoteIdentifier(table);
-    this.#db.exec(`CREATE TABLE IF NOT EXISTS ${name} (ID TEXT PRIMARY KEY, json TEXT)`);
+    const db = this.#conn.db;
+    // Check first so opening an existing table takes no write lock.
+    this.#conn.run(() => {
+      const exists = db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table);
+      if (exists === undefined) db.exec(`CREATE TABLE IF NOT EXISTS ${name} (ID TEXT PRIMARY KEY, json TEXT)`);
+    });
     this.#tables.set(table, {
-      selectAll: this.#db.prepare(`SELECT ID, json FROM ${name}`),
-      selectOne: this.#db.prepare(`SELECT json FROM ${name} WHERE ID = ?`),
-      upsert: this.#db.prepare(
-        `INSERT INTO ${name} (ID, json) VALUES (?, ?) ON CONFLICT (ID) DO UPDATE SET json = excluded.json`,
-      ),
-      deleteAll: this.#db.prepare(`DELETE FROM ${name}`),
-      deleteOne: this.#db.prepare(`DELETE FROM ${name} WHERE ID = ?`),
+      selectAll: db.prepare(`SELECT ID, json FROM ${name}`),
+      selectOne: db.prepare(`SELECT json FROM ${name} WHERE ID = ?`),
+      upsert: db.prepare(`INSERT INTO ${name} (ID, json) VALUES (?, ?) ON CONFLICT (ID) DO UPDATE SET json = excluded.json`),
+      deleteAll: db.prepare(`DELETE FROM ${name}`),
+      deleteOne: db.prepare(`DELETE FROM ${name} WHERE ID = ?`),
     });
   }
 
@@ -105,35 +106,41 @@ export class SqliteDriver {
 
   /** @internal */
   allSync(table: string): { id: string; value: unknown }[] {
-    return this.#statements(table)
-      .selectAll.all()
+    const statement = this.#statements(table).selectAll;
+    return this.#conn
+      .run(() => statement.all())
       .map((row) => ({ id: String(row["ID"]), value: parseJson(row["json"]) }));
   }
 
   /** @internal */
   readSync(table: string, key: string): [unknown, boolean] {
-    const row = this.#statements(table).selectOne.get(key);
+    const statement = this.#statements(table).selectOne;
+    const row = this.#conn.run(() => statement.get(key));
     return row === undefined ? [null, false] : [parseJson(row["json"]), true];
   }
 
   /** @internal */
   writeSync(table: string, key: string, value: unknown): void {
-    this.#statements(table).upsert.run(key, JSON.stringify(value));
+    const statement = this.#statements(table).upsert;
+    const json = JSON.stringify(value);
+    this.#conn.run(() => statement.run(key, json));
   }
 
   /** @internal */
   deleteAllSync(table: string): number {
-    return Number(this.#statements(table).deleteAll.run().changes);
+    const statement = this.#statements(table).deleteAll;
+    return Number(this.#conn.run(() => statement.run()).changes);
   }
 
   /** @internal */
   deleteSync(table: string, key: string): number {
-    return Number(this.#statements(table).deleteOne.run(key).changes);
+    const statement = this.#statements(table).deleteOne;
+    return Number(this.#conn.run(() => statement.run(key)).changes);
   }
 
   /** @internal Runs `fn` in an immediate transaction. */
   transaction<T>(fn: () => T): T {
-    return this.#tx.run(fn);
+    return this.#conn.transaction(fn);
   }
 }
 

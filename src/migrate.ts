@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { DEFAULT_NAMESPACE } from "./depo.js";
 import { DepoError } from "./errors.js";
-import { openConnection, quoteIdentifier, type ConnectionOptions } from "./sqlite.js";
+import { Connection, quoteIdentifier, type ConnectionOptions } from "./sqlite.js";
 import { Store } from "./store.js";
 
 /** One entry to import: the row key, its value as JSON text, and an absolute expiry. */
@@ -155,8 +155,11 @@ export function readCroxyJson(file: string, namespace: string = DEFAULT_NAMESPAC
  * to the namespace of the same name.
  */
 export function readQuickDb(file: string, tables?: readonly string[]): SourceGroup[] {
-  const db = openConnection(file, { readOnly: true });
+  const conn = new Connection(file, { readOnly: true });
+  const db = conn.db;
   try {
+    // One read transaction: every table is read from the same snapshot even if a quick.db process is writing.
+    db.exec("BEGIN");
     const available = db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all()
@@ -195,7 +198,8 @@ export function readQuickDb(file: string, tables?: readonly string[]): SourceGro
       return { origin: `table ${table}`, namespace, entries, warnings };
     });
   } finally {
-    db.close();
+    if (db.isTransaction) db.exec("ROLLBACK");
+    conn.close();
   }
 }
 

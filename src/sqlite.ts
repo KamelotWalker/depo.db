@@ -25,7 +25,7 @@ function resolveDatabaseClass(): DatabaseConstructor {
 export type Synchronous = "full" | "normal";
 
 export interface ConnectionOptions {
-  /** Milliseconds to wait for another process's lock before failing with SQLITE_BUSY. Default 5000. */
+  /** Milliseconds to wait for another connection's lock before failing with SQLITE_BUSY. Default 5000. */
   busyTimeout?: number;
   /** Durability level, see {@link Synchronous}. Default `"full"`. */
   synchronous?: Synchronous;
@@ -33,51 +33,6 @@ export interface ConnectionOptions {
 }
 
 export const DEFAULT_BUSY_TIMEOUT = 5000;
-
-export function openConnection(path: string, options: ConnectionOptions = {}): SqliteDatabase {
-  const busyTimeout = options.busyTimeout ?? DEFAULT_BUSY_TIMEOUT;
-  if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
-    throw new DepoError("busyTimeout must be a non-negative integer (milliseconds)");
-  }
-  const synchronous = options.synchronous ?? "full";
-  if (synchronous !== "full" && synchronous !== "normal") {
-    throw new DepoError('synchronous must be "full" or "normal"');
-  }
-  const readOnly = options.readOnly ?? false;
-  const db = new DatabaseClass(path, { readOnly, timeout: busyTimeout });
-  try {
-    // Set explicitly as well: the constructor option is the documented way, the
-    // pragma makes the value visible to anyone inspecting the connection.
-    db.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
-    if (!readOnly && path !== ":memory:" && path !== "") enableWal(db, busyTimeout);
-    db.exec(`PRAGMA synchronous = ${synchronous === "full" ? "FULL" : "NORMAL"}`);
-  } catch (error) {
-    db.close();
-    throw error;
-  }
-  return db;
-}
-
-/**
- * Switches the file to WAL mode. Changing the journal mode needs an exclusive
- * lock and SQLite does not run the busy handler for it, so when several
- * processes open a new file at once the switch is retried here until the busy
- * timeout elapses. Files already in WAL mode are left alone without locking.
- */
-function enableWal(db: SqliteDatabase, busyTimeout: number): void {
-  const deadline = Date.now() + busyTimeout;
-  for (let delay = 1; ; delay = Math.min(delay * 2, 50)) {
-    try {
-      const row = db.prepare("PRAGMA journal_mode").get();
-      if (row?.["journal_mode"] === "wal") return;
-      db.exec("PRAGMA journal_mode = WAL");
-      return;
-    } catch (error) {
-      if (!isBusy(error) || Date.now() >= deadline) throw error;
-      Atomics.wait(sleepCell, 0, 0, delay);
-    }
-  }
-}
 
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
@@ -89,35 +44,91 @@ function isBusy(error: unknown): boolean {
 }
 
 /**
- * Runs callbacks inside write transactions on one connection.
+ * Calls `fn`, retrying while it fails with SQLITE_BUSY, for up to `timeoutMs`.
  *
- * The outermost level uses `BEGIN IMMEDIATE`, which takes SQLite's write lock
- * before anything is read. A read-modify-write such as `add` therefore cannot
+ * Used instead of SQLite's built-in busy handler, whose back-off grows to
+ * 100 ms sleeps: under sustained writes from several processes a waiter that
+ * only wakes every 100 ms rarely finds the lock free and can starve for
+ * seconds. Polling every ~1-2 ms (with jitter) keeps waits short.
+ * Only use for operations that change nothing when they fail with SQLITE_BUSY.
+ */
+function retryBusy<T>(fn: () => T, timeoutMs: number): T {
+  let deadline = 0;
+  for (;;) {
+    try {
+      return fn();
+    } catch (error) {
+      if (!isBusy(error)) throw error;
+      const now = Date.now();
+      if (deadline === 0) deadline = now + timeoutMs;
+      if (now >= deadline) throw error;
+      Atomics.wait(sleepCell, 0, 0, 1 + Math.random());
+    }
+  }
+}
+
+/**
+ * One SQLite connection configured for Depo: WAL journal, chosen synchronous
+ * level, busy retries, and write transactions.
+ *
+ * Transactions use `BEGIN IMMEDIATE`, which takes SQLite's write lock before
+ * anything is read. A read-modify-write such as `add` therefore cannot
  * interleave with the same operation in another process: the second process
  * waits (up to the busy timeout) instead of reading a stale value. Nested
  * calls use savepoints so an inner failure only rolls back the inner work.
  */
-export class Transactor {
-  readonly #db: SqliteDatabase;
+export class Connection {
+  readonly db: SqliteDatabase;
+  readonly busyTimeout: number;
   readonly #begin: SqliteStatement;
   readonly #commit: SqliteStatement;
   readonly #rollback: SqliteStatement;
   #depth = 0;
 
-  constructor(db: SqliteDatabase) {
-    this.#db = db;
-    this.#begin = db.prepare("BEGIN IMMEDIATE");
-    this.#commit = db.prepare("COMMIT");
-    this.#rollback = db.prepare("ROLLBACK");
+  constructor(path: string, options: ConnectionOptions = {}) {
+    const busyTimeout = options.busyTimeout ?? DEFAULT_BUSY_TIMEOUT;
+    if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
+      throw new DepoError("busyTimeout must be a non-negative integer (milliseconds)");
+    }
+    const synchronous = options.synchronous ?? "full";
+    if (synchronous !== "full" && synchronous !== "normal") {
+      throw new DepoError('synchronous must be "full" or "normal"');
+    }
+    const readOnly = options.readOnly ?? false;
+    this.busyTimeout = busyTimeout;
+    // Writable connections handle SQLITE_BUSY in `retryBusy` (see there), so
+    // SQLite's own handler is off. Read-only connections never compete for the
+    // write lock and keep SQLite's handler.
+    this.db = new DatabaseClass(path, { readOnly, timeout: readOnly ? busyTimeout : 0 });
+    try {
+      if (!readOnly && path !== ":memory:" && path !== "") {
+        // Changing the journal mode needs an exclusive lock; retried when several processes open a new file at once.
+        retryBusy(() => {
+          const row = this.db.prepare("PRAGMA journal_mode").get();
+          if (row?.["journal_mode"] !== "wal") this.db.exec("PRAGMA journal_mode = WAL");
+        }, busyTimeout);
+      }
+      this.db.exec(`PRAGMA synchronous = ${synchronous === "full" ? "FULL" : "NORMAL"}`);
+      this.#begin = this.db.prepare("BEGIN IMMEDIATE");
+      this.#commit = this.db.prepare("COMMIT");
+      this.#rollback = this.db.prepare("ROLLBACK");
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
-  get active(): boolean {
-    return this.#depth > 0;
-  }
-
+  /**
+   * Runs a single statement. Outside a transaction it is its own (autocommit)
+   * transaction and is retried on SQLITE_BUSY; inside one the lock is already held.
+   */
   run<T>(fn: () => T): T {
-    if (this.#depth > 0) return this.#runNested(fn);
-    this.#begin.run();
+    return this.#depth > 0 ? fn() : retryBusy(fn, this.busyTimeout);
+  }
+
+  transaction<T>(fn: () => T): T {
+    if (this.#depth > 0) return this.#nested(fn);
+    retryBusy(() => this.#begin.run(), this.busyTimeout);
     this.#depth = 1;
     let result: T;
     try {
@@ -125,22 +136,22 @@ export class Transactor {
       assertSync(result);
     } catch (error) {
       this.#depth = 0;
-      if (this.#db.isTransaction) this.#rollback.run();
+      if (this.db.isTransaction) this.#rollback.run();
       throw error;
     }
     this.#depth = 0;
     try {
-      this.#commit.run();
+      retryBusy(() => this.#commit.run(), this.busyTimeout);
     } catch (error) {
-      if (this.#db.isTransaction) this.#rollback.run();
+      if (this.db.isTransaction) this.#rollback.run();
       throw error;
     }
     return result;
   }
 
-  #runNested<T>(fn: () => T): T {
+  #nested<T>(fn: () => T): T {
     const name = `depo_sp_${this.#depth}`;
-    this.#db.exec(`SAVEPOINT ${name}`);
+    this.db.exec(`SAVEPOINT ${name}`);
     this.#depth++;
     let result: T;
     try {
@@ -148,12 +159,16 @@ export class Transactor {
       assertSync(result);
     } catch (error) {
       this.#depth--;
-      this.#db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`);
+      this.db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`);
       throw error;
     }
     this.#depth--;
-    this.#db.exec(`RELEASE ${name}`);
+    this.db.exec(`RELEASE ${name}`);
     return result;
+  }
+
+  close(): void {
+    this.db.close();
   }
 }
 

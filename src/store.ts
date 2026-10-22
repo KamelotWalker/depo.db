@@ -1,11 +1,5 @@
 import { DepoError } from "./errors.js";
-import {
-  openConnection,
-  Transactor,
-  type ConnectionOptions,
-  type SqliteDatabase,
-  type SqliteStatement,
-} from "./sqlite.js";
+import { Connection, type ConnectionOptions, type SqliteStatement } from "./sqlite.js";
 
 export const SCHEMA_VERSION = 1;
 
@@ -29,9 +23,8 @@ export interface RawEntry {
  * column, not separate SQL tables, so no identifier is ever built from user input.
  */
 export class Store {
-  readonly #db: SqliteDatabase;
-  readonly #tx: Transactor;
   readonly path: string;
+  readonly #conn: Connection;
   #closed = false;
 
   readonly #selectRow: SqliteStatement;
@@ -42,46 +35,77 @@ export class Store {
   readonly #countLive: SqliteStatement;
   readonly #deleteNamespace: SqliteStatement;
   readonly #purge: SqliteStatement;
+  readonly #anyExpired: SqliteStatement;
   readonly #setExpiry: SqliteStatement;
+  readonly #selectMeta: SqliteStatement;
+  readonly #upsertMeta: SqliteStatement;
 
   constructor(path: string, options: ConnectionOptions) {
     this.path = path;
-    this.#db = openConnection(path, options);
+    this.#conn = new Connection(path, options);
+    const db = this.#conn.db;
     try {
-      this.#tx = new Transactor(this.#db);
-      this.#tx.run(() => this.#migrate());
-      this.#selectRow = this.#db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
-      this.#upsert = this.#db.prepare(
+      // Opening an existing file takes no write lock: under heavy write traffic from other
+      // processes a late opener would otherwise have to win the lock just to start.
+      const version = this.#conn.run(() => this.#readSchemaVersion());
+      if (version === undefined) this.#conn.transaction(() => this.#migrate());
+      else this.#checkVersion(version);
+      this.#selectRow = db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
+      this.#upsert = db.prepare(
         "INSERT INTO depo_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
           "ON CONFLICT (ns, key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
       );
-      this.#deleteLive = this.#db.prepare(
+      this.#deleteLive = db.prepare(
         "DELETE FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#selectAll = this.#db.prepare(
+      this.#selectAll = db.prepare(
         "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
       );
-      this.#selectPrefix = this.#db.prepare(
+      this.#selectPrefix = db.prepare(
         "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) " +
           "AND key >= ? AND key < ? ORDER BY key LIMIT ?",
       );
-      this.#countLive = this.#db.prepare(
+      this.#countLive = db.prepare(
         "SELECT count(*) AS n FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#deleteNamespace = this.#db.prepare("DELETE FROM depo_entries WHERE ns = ?");
-      this.#purge = this.#db.prepare("DELETE FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
-      this.#setExpiry = this.#db.prepare(
+      this.#deleteNamespace = db.prepare("DELETE FROM depo_entries WHERE ns = ?");
+      this.#purge = db.prepare("DELETE FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
+      this.#anyExpired = db.prepare("SELECT 1 FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT 1");
+      this.#setExpiry = db.prepare(
         "UPDATE depo_entries SET expires_at = ? WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
+      );
+      this.#selectMeta = db.prepare("SELECT value FROM depo_meta WHERE key = ?");
+      this.#upsertMeta = db.prepare(
+        "INSERT INTO depo_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       );
       if (!(options.readOnly ?? false)) this.purgeExpired(Date.now());
     } catch (error) {
-      this.#db.close();
+      this.#conn.close();
       throw error;
     }
   }
 
+  /** Schema version when all of Depo's tables exist, else `undefined`. */
+  #readSchemaVersion(): number | undefined {
+    const db = this.#conn.db;
+    const objects = db
+      .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_meta', 'depo_entries', 'depo_entries_expires_at')")
+      .get();
+    if (Number(objects?.["n"]) !== 3) return undefined;
+    const row = db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
+    return row === undefined ? undefined : Number(row["value"]);
+  }
+
+  #checkVersion(version: number): void {
+    if (version > SCHEMA_VERSION) {
+      throw new DepoError(
+        `${this.path} uses Depo schema version ${version}; this version of Depo only understands ${SCHEMA_VERSION}. Upgrade Depo.`,
+      );
+    }
+  }
+
   #migrate(): void {
-    this.#db.exec(`
+    this.#conn.db.exec(`
       CREATE TABLE IF NOT EXISTS depo_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -95,16 +119,13 @@ export class Store {
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
     `);
-    const row = this.#db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
-    if (row === undefined) {
-      this.#db.prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
-      return;
-    }
-    const version = Number(row["value"]);
-    if (version > SCHEMA_VERSION) {
-      throw new DepoError(
-        `${this.path} uses Depo schema version ${version}; this version of Depo only understands ${SCHEMA_VERSION}. Upgrade Depo.`,
-      );
+    const version = this.#readSchemaVersion();
+    if (version === undefined) {
+      this.#conn.db
+        .prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)")
+        .run(String(SCHEMA_VERSION));
+    } else {
+      this.#checkVersion(version);
     }
   }
 
@@ -115,37 +136,33 @@ export class Store {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#db.close();
+    this.#conn.close();
   }
 
-  /** Throws a clear error instead of node:sqlite's "statement has been finalized". */
-  #ensureOpen(): void {
+  /** Runs one statement; throws a clear error instead of node:sqlite's "statement has been finalized" once closed. */
+  #run<T>(fn: () => T): T {
     if (this.#closed) throw new DepoError("The database is closed");
+    return this.#conn.run(fn);
   }
 
   /** Runs `fn` in an immediate transaction (savepoint when nested). */
   transaction<T>(fn: () => T): T {
-    this.#ensureOpen();
-    return this.#tx.run(fn);
+    if (this.#closed) throw new DepoError("The database is closed");
+    return this.#conn.transaction(fn);
   }
 
   getMeta(key: string): string | undefined {
-    this.#ensureOpen();
-    const row = this.#db.prepare("SELECT value FROM depo_meta WHERE key = ?").get(key);
+    const row = this.#run(() => this.#selectMeta.get(key));
     return row === undefined ? undefined : String(row["value"]);
   }
 
   setMeta(key: string, value: string): void {
-    this.#ensureOpen();
-    this.#db
-      .prepare("INSERT INTO depo_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
-      .run(key, value);
+    this.#run(() => this.#upsertMeta.run(key, value));
   }
 
   /** Returns the live (non-expired) row, or `undefined`. */
   read(ns: string, key: string, now: number): Row | undefined {
-    this.#ensureOpen();
-    const row = this.#selectRow.get(ns, key);
+    const row = this.#run(() => this.#selectRow.get(ns, key));
     if (row === undefined) return undefined;
     const value = row["value"];
     const expiresAt = row["expires_at"];
@@ -157,43 +174,38 @@ export class Store {
   }
 
   write(ns: string, key: string, json: string, expiresAt: number | null): void {
-    this.#ensureOpen();
-    this.#upsert.run(ns, key, json, expiresAt);
+    this.#run(() => this.#upsert.run(ns, key, json, expiresAt));
   }
 
   deleteLive(ns: string, key: string, now: number): boolean {
-    this.#ensureOpen();
-    return Number(this.#deleteLive.run(ns, key, now).changes) > 0;
+    return Number(this.#run(() => this.#deleteLive.run(ns, key, now)).changes) > 0;
   }
 
   list(ns: string, now: number, prefix: string, limit: number): RawEntry[] {
-    this.#ensureOpen();
-    const rows =
+    const rows = this.#run(() =>
       prefix === ""
         ? this.#selectAll.all(ns, now, limit)
-        : this.#selectPrefix.all(ns, now, prefix, prefixUpperBound(prefix), limit);
+        : this.#selectPrefix.all(ns, now, prefix, prefixUpperBound(prefix), limit),
+    );
     return rows.map((row) => ({ key: String(row["key"]), value: String(row["value"]) }));
   }
 
   count(ns: string, now: number): number {
-    this.#ensureOpen();
-    const row = this.#countLive.get(ns, now);
+    const row = this.#run(() => this.#countLive.get(ns, now));
     return Number(row?.["n"] ?? 0);
   }
 
   deleteNamespace(ns: string): void {
-    this.#ensureOpen();
-    this.#deleteNamespace.run(ns);
+    this.#run(() => this.#deleteNamespace.run(ns));
   }
 
+  /** Deletes expired rows in every namespace. Takes no write lock when nothing has expired. */
   purgeExpired(now: number): number {
-    this.#ensureOpen();
-    return Number(this.#purge.run(now).changes);
+    return this.#run(() => (this.#anyExpired.get(now) === undefined ? 0 : Number(this.#purge.run(now).changes)));
   }
 
   setExpiry(ns: string, key: string, expiresAt: number | null, now: number): boolean {
-    this.#ensureOpen();
-    return Number(this.#setExpiry.run(expiresAt, ns, key, now).changes) > 0;
+    return Number(this.#run(() => this.#setExpiry.run(expiresAt, ns, key, now)).changes) > 0;
   }
 }
 
