@@ -1,0 +1,47 @@
+{
+    "money_111": 750,
+    "money_222": 0,
+    "user": {
+        "312345678901234567": {
+            "name": "Ayşe",
+            "level": 7
+        },
+        "398765432109876543": {
+            "name": "Mehmet"
+        }
+    },
+    "inventory_111": [
+        "kılıç",
+        "kalkan"
+    ],
+    "guild": {
+        "876543210987654321": {
+            "prefix": "!",
+            "channels": [
+                "genel",
+                "duyuru"
+            ]
+        }
+    },
+    "slots": [
+        null,
+        null,
+        "x"
+    ],
+    "flag": true,
+    "text": "merhaba dünya",
+    "emoji_🎉": "parti",
+    "float": 3.25,
+    "nested": {
+        "a": {
+            "b": {
+                "c": [
+                    1,
+                    {
+                        "d": null
+                    }
+                ]
+            }
+        }
+    }
+}

@@ -66,7 +66,7 @@
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/write-dist-pkg.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test --test-concurrency=1 test/",
+    "test": "npm run build && node --test \"test/**/*.test.mjs\"",
     "smoke": "node scripts/smoke.mjs",
     "fixtures": "node scripts/make-fixtures.mjs",
     "bench": "npm run build && node bench/run.mjs",

@@ -49,15 +49,43 @@ export function openConnection(path: string, options: ConnectionOptions = {}): S
     // Set explicitly as well: the constructor option is the documented way, the
     // pragma makes the value visible to anyone inspecting the connection.
     db.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
-    if (!readOnly && path !== ":memory:" && path !== "") {
-      db.exec("PRAGMA journal_mode = WAL");
-    }
+    if (!readOnly && path !== ":memory:" && path !== "") enableWal(db, busyTimeout);
     db.exec(`PRAGMA synchronous = ${synchronous === "full" ? "FULL" : "NORMAL"}`);
   } catch (error) {
     db.close();
     throw error;
   }
   return db;
+}
+
+/**
+ * Switches the file to WAL mode. Changing the journal mode needs an exclusive
+ * lock and SQLite does not run the busy handler for it, so when several
+ * processes open a new file at once the switch is retried here until the busy
+ * timeout elapses. Files already in WAL mode are left alone without locking.
+ */
+function enableWal(db: SqliteDatabase, busyTimeout: number): void {
+  const deadline = Date.now() + busyTimeout;
+  for (let delay = 1; ; delay = Math.min(delay * 2, 50)) {
+    try {
+      const row = db.prepare("PRAGMA journal_mode").get();
+      if (row?.["journal_mode"] === "wal") return;
+      db.exec("PRAGMA journal_mode = WAL");
+      return;
+    } catch (error) {
+      if (!isBusy(error) || Date.now() >= deadline) throw error;
+      Atomics.wait(sleepCell, 0, 0, delay);
+    }
+  }
+}
+
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+
+/** SQLITE_BUSY (5) or SQLITE_LOCKED (6), including their extended codes. */
+function isBusy(error: unknown): boolean {
+  if (!(error instanceof Error) || !("errcode" in error) || typeof error.errcode !== "number") return false;
+  const primary = error.errcode & 0xff;
+  return primary === 5 || primary === 6;
 }
 
 /**
