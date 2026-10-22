@@ -1,0 +1,94 @@
+{
+  "name": "depo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zero-dependency key-value database for Node.js on the built-in node:sqlite. Drop-in replacement for wio.db and quick.db without native modules.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./quickdb": {
+      "import": {
+        "types": "./dist/esm/compat/quickdb.d.ts",
+        "default": "./dist/esm/compat/quickdb.js"
+      },
+      "require": {
+        "types": "./dist/cjs/compat/quickdb.d.ts",
+        "default": "./dist/cjs/compat/quickdb.js"
+      }
+    },
+    "./wiodb": {
+      "import": {
+        "types": "./dist/esm/compat/wiodb.d.ts",
+        "default": "./dist/esm/compat/wiodb.js"
+      },
+      "require": {
+        "types": "./dist/cjs/compat/wiodb.d.ts",
+        "default": "./dist/cjs/compat/wiodb.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "quickdb": [
+        "./dist/cjs/compat/quickdb.d.ts"
+      ],
+      "wiodb": [
+        "./dist/cjs/compat/wiodb.d.ts"
+      ]
+    }
+  },
+  "bin": {
+    "depo": "./dist/cjs/cli.js"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/write-dist-pkg.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --test-concurrency=1 test/",
+    "smoke": "node scripts/smoke.mjs",
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "bench": "npm run build && node bench/run.mjs",
+    "attw": "attw --pack ."
+  },
+  "keywords": [
+    "database",
+    "key-value",
+    "sqlite",
+    "node:sqlite",
+    "quick.db",
+    "wio.db",
+    "discord",
+    "zero-dependency"
+  ],
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@types/node": "24.19.2",
+    "better-sqlite3": "13.0.3",
+    "croxydb": "0.0.27",
+    "quick.db": "9.1.7",
+    "typescript": "7.0.2",
+    "wio.db": "4.0.22"
+  }
+}
