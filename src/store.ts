@@ -29,8 +29,8 @@ export interface RawEntry {
  * column, not separate SQL tables, so no identifier is ever built from user input.
  */
 export class Store {
-  readonly db: SqliteDatabase;
-  readonly tx: Transactor;
+  readonly #db: SqliteDatabase;
+  readonly #tx: Transactor;
   readonly path: string;
   #closed = false;
 
@@ -46,42 +46,42 @@ export class Store {
 
   constructor(path: string, options: ConnectionOptions) {
     this.path = path;
-    this.db = openConnection(path, options);
+    this.#db = openConnection(path, options);
     try {
-      this.tx = new Transactor(this.db);
-      this.tx.run(() => this.#migrate());
-      this.#selectRow = this.db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
-      this.#upsert = this.db.prepare(
+      this.#tx = new Transactor(this.#db);
+      this.#tx.run(() => this.#migrate());
+      this.#selectRow = this.#db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
+      this.#upsert = this.#db.prepare(
         "INSERT INTO depo_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
           "ON CONFLICT (ns, key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
       );
-      this.#deleteLive = this.db.prepare(
+      this.#deleteLive = this.#db.prepare(
         "DELETE FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#selectAll = this.db.prepare(
+      this.#selectAll = this.#db.prepare(
         "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
       );
-      this.#selectPrefix = this.db.prepare(
+      this.#selectPrefix = this.#db.prepare(
         "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) " +
           "AND key >= ? AND key < ? ORDER BY key LIMIT ?",
       );
-      this.#countLive = this.db.prepare(
+      this.#countLive = this.#db.prepare(
         "SELECT count(*) AS n FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#deleteNamespace = this.db.prepare("DELETE FROM depo_entries WHERE ns = ?");
-      this.#purge = this.db.prepare("DELETE FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
-      this.#setExpiry = this.db.prepare(
+      this.#deleteNamespace = this.#db.prepare("DELETE FROM depo_entries WHERE ns = ?");
+      this.#purge = this.#db.prepare("DELETE FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
+      this.#setExpiry = this.#db.prepare(
         "UPDATE depo_entries SET expires_at = ? WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
       if (!(options.readOnly ?? false)) this.purgeExpired(Date.now());
     } catch (error) {
-      this.db.close();
+      this.#db.close();
       throw error;
     }
   }
 
   #migrate(): void {
-    this.db.exec(`
+    this.#db.exec(`
       CREATE TABLE IF NOT EXISTS depo_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -95,9 +95,9 @@ export class Store {
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
     `);
-    const row = this.db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
+    const row = this.#db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
     if (row === undefined) {
-      this.db.prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
+      this.#db.prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
       return;
     }
     const version = Number(row["value"]);
@@ -115,22 +115,36 @@ export class Store {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.db.close();
+    this.#db.close();
+  }
+
+  /** Throws a clear error instead of node:sqlite's "statement has been finalized". */
+  #ensureOpen(): void {
+    if (this.#closed) throw new DepoError("The database is closed");
+  }
+
+  /** Runs `fn` in an immediate transaction (savepoint when nested). */
+  transaction<T>(fn: () => T): T {
+    this.#ensureOpen();
+    return this.#tx.run(fn);
   }
 
   getMeta(key: string): string | undefined {
-    const row = this.db.prepare("SELECT value FROM depo_meta WHERE key = ?").get(key);
+    this.#ensureOpen();
+    const row = this.#db.prepare("SELECT value FROM depo_meta WHERE key = ?").get(key);
     return row === undefined ? undefined : String(row["value"]);
   }
 
   setMeta(key: string, value: string): void {
-    this.db
+    this.#ensureOpen();
+    this.#db
       .prepare("INSERT INTO depo_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
       .run(key, value);
   }
 
   /** Returns the live (non-expired) row, or `undefined`. */
   read(ns: string, key: string, now: number): Row | undefined {
+    this.#ensureOpen();
     const row = this.#selectRow.get(ns, key);
     if (row === undefined) return undefined;
     const value = row["value"];
@@ -143,14 +157,17 @@ export class Store {
   }
 
   write(ns: string, key: string, json: string, expiresAt: number | null): void {
+    this.#ensureOpen();
     this.#upsert.run(ns, key, json, expiresAt);
   }
 
   deleteLive(ns: string, key: string, now: number): boolean {
+    this.#ensureOpen();
     return Number(this.#deleteLive.run(ns, key, now).changes) > 0;
   }
 
   list(ns: string, now: number, prefix: string, limit: number): RawEntry[] {
+    this.#ensureOpen();
     const rows =
       prefix === ""
         ? this.#selectAll.all(ns, now, limit)
@@ -159,19 +176,23 @@ export class Store {
   }
 
   count(ns: string, now: number): number {
+    this.#ensureOpen();
     const row = this.#countLive.get(ns, now);
     return Number(row?.["n"] ?? 0);
   }
 
   deleteNamespace(ns: string): void {
+    this.#ensureOpen();
     this.#deleteNamespace.run(ns);
   }
 
   purgeExpired(now: number): number {
+    this.#ensureOpen();
     return Number(this.#purge.run(now).changes);
   }
 
   setExpiry(ns: string, key: string, expiresAt: number | null, now: number): boolean {
+    this.#ensureOpen();
     return Number(this.#setExpiry.run(expiresAt, ns, key, now).changes) > 0;
   }
 }

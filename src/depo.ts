@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DepoError } from "./errors.js";
 import { deleteIn, formatKey, getIn, parseKey, setIn, typeName, type Key } from "./path.js";
 import type { ConnectionOptions } from "./sqlite.js";
-import { Store, type Row } from "./store.js";
+import { Store } from "./store.js";
 
 export interface DepoOptions extends ConnectionOptions {
   /** Namespace used by this instance. Default `"default"`. See {@link Depo.table}. */
@@ -71,7 +71,6 @@ export class Depo {
    */
   table(namespace: string): Depo {
     assertNamespace(namespace);
-    this.#assertOpen();
     sharedStore = this.#store;
     try {
       return new Depo(this.#store.path, { namespace });
@@ -85,7 +84,7 @@ export class Depo {
   get<T>(key: Key, defaultValue: T): T;
   get(key: Key, defaultValue?: unknown): unknown {
     const [rowKey, ...path] = parseKey(key);
-    const row = this.#read(rowKey!);
+    const row = this.#store.read(this.namespace, rowKey!, Date.now());
     if (row === undefined) return defaultValue;
     const value = getIn(decode(row.value, rowKey!), path);
     return value === undefined ? defaultValue : value;
@@ -106,7 +105,6 @@ export class Depo {
     const ttl = options.ttl;
     if (path.length === 0) {
       const expiresAt = ttl === undefined ? null : expiryFromTtl(ttl);
-      this.#assertOpen();
       this.#store.write(this.namespace, rowKey!, encode(value, rowKey!), expiresAt);
       return value;
     }
@@ -120,7 +118,6 @@ export class Depo {
   /** Removes a key or a path. Array elements addressed by index are spliced out. Returns whether anything was removed. */
   delete(key: Key): boolean {
     const [rowKey, ...path] = parseKey(key);
-    this.#assertOpen();
     if (path.length === 0) return this.#store.deleteLive(this.namespace, rowKey!, Date.now());
     let removed = false;
     this.#modify(rowKey!, (root) => {
@@ -138,7 +135,6 @@ export class Depo {
     if (options.limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
       throw new DepoError("limit must be a non-negative integer");
     }
-    this.#assertOpen();
     return this.#store
       .list(this.namespace, Date.now(), prefix, limit)
       .map((entry) => ({ key: entry.key, value: decode(entry.value, entry.key) as T }));
@@ -146,14 +142,12 @@ export class Depo {
 
   /** Number of live entries in this namespace. */
   count(): number {
-    this.#assertOpen();
     return this.#store.count(this.namespace, Date.now());
   }
 
   /** Removes every entry of this namespace. Returns how many live entries were removed. */
   deleteAll(): number {
-    this.#assertOpen();
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       const removed = this.#store.count(this.namespace, Date.now());
       this.#store.deleteNamespace(this.namespace);
       return removed;
@@ -229,7 +223,6 @@ export class Depo {
   ttl(key: Key): number | null | undefined {
     const rowKey = this.#entryKey(key, "ttl");
     const now = Date.now();
-    this.#assertOpen();
     const row = this.#store.read(this.namespace, rowKey, now);
     if (row === undefined) return undefined;
     return row.expiresAt === null ? null : row.expiresAt - now;
@@ -239,7 +232,6 @@ export class Depo {
   expire(key: Key, ttl: number | null): boolean {
     const rowKey = this.#entryKey(key, "expire");
     const expiresAt = ttl === null ? null : expiryFromTtl(ttl);
-    this.#assertOpen();
     return this.#store.setExpiry(this.namespace, rowKey, expiresAt, Date.now());
   }
 
@@ -249,7 +241,6 @@ export class Depo {
    * their space. Also runs automatically when a file is opened.
    */
   purgeExpired(): number {
-    this.#assertOpen();
     return this.#store.purgeExpired(Date.now());
   }
 
@@ -259,22 +250,12 @@ export class Depo {
    * synchronous. Nested calls use savepoints.
    */
   transaction<T>(fn: () => T): T {
-    this.#assertOpen();
-    return this.#store.tx.run(fn);
+    return this.#store.transaction(fn);
   }
 
   /** Closes the connection. Closes every `table()` view sharing it. */
   close(): void {
     this.#store.close();
-  }
-
-  #assertOpen(): void {
-    if (this.#store.closed) throw new DepoError("The database is closed");
-  }
-
-  #read(rowKey: string): Row | undefined {
-    this.#assertOpen();
-    return this.#store.read(this.namespace, rowKey, Date.now());
   }
 
   #entryKey(key: Key, method: string): string {
@@ -291,8 +272,7 @@ export class Depo {
    * `SKIP` to leave the entry untouched. The entry's expiry is preserved.
    */
   #modify(rowKey: string, fn: (root: unknown) => unknown): void {
-    this.#assertOpen();
-    this.#store.tx.run(() => {
+    this.#store.transaction(() => {
       const row = this.#store.read(this.namespace, rowKey, Date.now());
       const root = row === undefined ? undefined : decode(row.value, rowKey);
       const next = fn(root);

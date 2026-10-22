@@ -95,7 +95,7 @@ export class JsonDatabase<V> {
   /** Imports the wio.db JSON file into an empty database, once per SQLite file. Race-free across processes. */
   #importOnce(importJson: boolean): void {
     const store = this.#store;
-    store.tx.run(() => {
+    store.transaction(() => {
       if (store.getMeta(IMPORT_META_KEY) !== undefined) return;
       let imported = 0;
       if (importJson && existsSync(this.jsonPath) && store.count(NS, Date.now()) === 0) {
@@ -136,7 +136,7 @@ export class JsonDatabase<V> {
     const raw: unknown = value;
     if (raw === "" || raw === undefined || raw === null) throw new DatabaseError("Unapproved value!");
     assertAutoWrite(autoWrite);
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       const [rowKey, rest] = this.#resolve(key);
       const current = this.#readRow(rowKey);
       if (current === undefined && this.maxDataSize !== null && this.size >= this.maxDataSize) {
@@ -197,7 +197,7 @@ export class JsonDatabase<V> {
   delete(key: string, autoWrite = true): void {
     assertKey(key);
     assertAutoWrite(autoWrite);
-    this.#store.tx.run(() => {
+    this.#store.transaction(() => {
       const [rowKey, rest] = this.#resolve(key);
       if (rest.length === 0) {
         this.#store.deleteLive(NS, rowKey, Date.now());
@@ -227,7 +227,7 @@ export class JsonDatabase<V> {
     multiple = false,
     thisArg?: unknown,
   ): V | false {
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       const data: unknown = this.get(key);
       if (!data) return false;
       if (!Array.isArray(data)) throw new DatabaseError(`${key} It is not a data string with an ID.`);
@@ -256,7 +256,7 @@ export class JsonDatabase<V> {
     if (Number(raw) <= 0) throw new DatabaseError("Value cannot be less than 1.");
     const amount = Number(raw);
     if (typeof goToNegative !== "boolean") throw new DatabaseError("The goToNegative parameter must be of boolean type.");
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       const data: unknown = this.get(key);
       let current = 0;
       if (data) {
@@ -296,7 +296,7 @@ export class JsonDatabase<V> {
   }
 
   push(key: string, value: unknown): V {
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       const data: unknown = this.get(key);
       if (data && Array.isArray(data)) {
         data.push(value);
@@ -330,7 +330,7 @@ export class JsonDatabase<V> {
 
   findAndDelete(callbackfn: (element: Schema<V>, provider: this) => boolean, thisArg?: unknown): number {
     const predicate = thisArg ? callbackfn.bind(thisArg) : callbackfn;
-    return this.#store.tx.run(() => {
+    return this.#store.transaction(() => {
       let deleted = 0;
       for (const element of this.all()) {
         if (predicate(element, this)) {

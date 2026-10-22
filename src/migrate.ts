@@ -246,11 +246,13 @@ export function runMigration(options: MigrationOptions): MigrationReport {
       ? readQuickDb(source, options.tables)
       : [format === "croxydb" ? readCroxyJson(source, namespace, now) : readWioJson(source, namespace)];
 
-  const store = new Store(target, options.connection ?? {});
+  // A dry run against a target that does not exist yet must not create it; an empty in-memory store is equivalent.
+  const storePath = options.dryRun && !existsSync(target) ? ":memory:" : target;
+  const store = new Store(storePath, options.connection ?? {});
   const reports: GroupReport[] = [];
   try {
     try {
-      store.tx.run(() => {
+      store.transaction(() => {
         for (const group of groups) {
           const stats = importEntries(store, group.namespace, group.entries, options.overwrite ?? false, now);
           reports.push({ origin: group.origin, namespace: group.namespace, warnings: group.warnings, ...stats });
