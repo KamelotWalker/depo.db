@@ -1,26 +1,26 @@
-# Depo
+# Zula
 
 A key-value database for Node.js on the built-in `node:sqlite` module.
 **Zero dependencies, no native module, no node-gyp**: `npm install` and it works.
 
-Depo is meant as the successor to [wio.db](https://www.npmjs.com/package/wio.db)
+Zula is meant as the successor to [wio.db](https://www.npmjs.com/package/wio.db)
 (last release 2021) and [quick.db](https://www.npmjs.com/package/quick.db)
 (last release 2023, needs the native `better-sqlite3` module that you install
 and compile yourself). Both have drop-in compatibility entry points, so moving
 over is a one-line change.
 
-> Working name. The package is not published yet (`"private": true`).
+> The final package name is `zula`. It is not published yet (`"private": true`).
 
 - Synchronous API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Dot paths into stored objects: `db.add("user.42.coins", 10)`
 - TTL per entry, namespaces, multi-key transactions
 - Atomic across processes: several bot shards can share one file
-- `depo migrate` CLI to import wio.db, croxydb and quick.db data
+- `zula migrate` CLI to import wio.db, croxydb and quick.db data
 
 ## Install
 
 ```sh
-npm install depo
+npm install zula
 ```
 
 Requires **Node.js 24.15.0 or newer**: the first release line where
@@ -30,9 +30,9 @@ Requires **Node.js 24.15.0 or newer**: the first release line where
 ## Quick start
 
 ```js
-const { Depo } = require("depo");     // or: import { Depo } from "depo";
+const { Zula } = require("zula");     // or: import { Zula } from "zula";
 
-const db = new Depo("bot.sqlite");    // created if missing; parent folder must exist
+const db = new Zula("bot.sqlite");    // created if missing; parent folder must exist
 
 db.set("prefix", "!");
 db.get("prefix");                     // "!"
@@ -56,7 +56,7 @@ db.transaction(() => {                // all or nothing
 
 ## API
 
-`new Depo(path = "depo.sqlite", options?)`
+`new Zula(path = "zula.sqlite", options?)`
 
 | Option | Default | |
 |---|---|---|
@@ -79,13 +79,13 @@ db.transaction(() => {                // all or nothing
 | `ttl(key)` | ms \| `null` \| `undefined` | Remaining TTL; `null` = never expires; `undefined` = missing |
 | `expire(key, ms \| null)` | `boolean` | Set or clear the TTL of an existing entry |
 | `purgeExpired()` | `number` | Delete expired entries from disk (all namespaces) |
-| `table(name)` | `Depo` | View of another namespace sharing the connection |
+| `table(name)` | `Zula` | View of another namespace sharing the connection |
 | `transaction(fn)` | `fn`'s result | Synchronous `fn`, all writes commit together |
 | `close()` | | Closes the connection (and all `table()` views) |
 
-Also exported: `DepoError` (thrown for invalid keys, values and type
+Also exported: `ZulaError` (thrown for invalid keys, values and type
 mismatches), `escapeKey(segment)`, `VERSION`, and the TypeScript types `Key`,
-`Entry`, `DepoOptions`, `SetOptions`, `AllOptions`.
+`Entry`, `ZulaOptions`, `SetOptions`, `AllOptions`.
 
 Typed reads: `db.get<number>("coins")` returns `number | undefined`;
 `db.get("coins", 0)` returns `number`.
@@ -104,7 +104,7 @@ db.get(`${escapeKey("site.com")}.visits`);
 - The **first segment is the entry**, stored as one SQLite row. The rest is a
   path inside that entry's JSON value.
 - `\.` is a literal dot, `\\` a literal backslash. Other escapes, and empty
-  segments (`""`, `"a..b"`, `".a"`), throw `DepoError`.
+  segments (`""`, `"a..b"`, `".a"`), throw `ZulaError`.
 - Missing objects along a path are created as plain objects, also for numeric
   segments: `set("slots.2", "x")` → `{ slots: { "2": "x" } }` (quick.db and
   wio.db would create `[null, null, "x"]`).
@@ -113,7 +113,7 @@ db.get(`${escapeKey("site.com")}.visits`);
 - Writing a path through a non-object (`set("coins.x", 1)` when `coins` is `5`)
   throws instead of replacing the value.
 - Entry keys (the first segment) and namespaces must be well-formed Unicode. A
-  lone UTF-16 surrogate such as `"a\uD800"` throws `DepoError`: SQLite stores
+  lone UTF-16 surrogate such as `"a\uD800"` throws `ZulaError`: SQLite stores
   text as UTF-8, where it would become U+FFFD and merge with other keys.
 
 Rationale: [decisions §3–4](docs/decisions.md#3-keys-dots-are-paths-backslash-escapes).
@@ -122,7 +122,7 @@ Rationale: [decisions §3–4](docs/decisions.md#3-keys-dots-are-paths-backslash
 
 Values are stored as JSON: objects, arrays, strings, numbers, booleans, `null`.
 
-- `undefined`, functions, symbols and `BigInt` throw `DepoError` (use `delete()`
+- `undefined`, functions, symbols and `BigInt` throw `ZulaError` (use `delete()`
   instead of storing `undefined`), also as the value of a path `set` or `push`.
   Nested inside an object or array, functions and symbols follow plain
   `JSON.stringify` rules (properties dropped, array elements `null`).
@@ -167,7 +167,7 @@ and `pull` keep it.
 
 ```diff
 - const { JsonDatabase } = require("wio.db");
-+ const { JsonDatabase } = require("depo/wiodb");
++ const { JsonDatabase } = require("zula/wiodb");
 ```
 
 Your code keeps working. On first start the existing `databases/db.json` is
@@ -176,27 +176,27 @@ backup. Every wio.db method is supported; the few intentional differences (bug
 fixes such as `substr` on a 0 balance, key order, no `YamlDatabase`) are listed
 in [docs/compat-wiodb.md](docs/compat-wiodb.md).
 
-The same `.sqlite` file can later be opened with `new Depo("databases/db.sqlite")`.
+The same `.sqlite` file can later be opened with `new Zula("databases/db.sqlite")`.
 
 ## Migrating from quick.db
 
 ```diff
 - const { QuickDB } = require("quick.db");
-+ const { QuickDB } = require("depo/quickdb");
++ const { QuickDB } = require("zula/quickdb");
 ```
 
-`depo/quickdb` reads and writes quick.db's own `json.sqlite` format, so there is
+`zula/quickdb` reads and writes quick.db's own `json.sqlite` format, so there is
 nothing to convert, and you can uninstall `better-sqlite3`. The file stays
 readable by quick.db if you ever go back. Same async API and return values;
 differences (only `SqliteDriver`/`MemoryDriver`, two bug fixes, atomic
 operations) are in [docs/compat-quickdb.md](docs/compat-quickdb.md).
 
-## `depo migrate`: move data to the native API
+## `zula migrate`: move data to the native API
 
 ```sh
-npx depo migrate databases/db.json --to bot.sqlite                 # wio.db
-npx depo migrate croxydb/croxydb.json --from croxydb --to bot.sqlite  # croxydb, keeps TTLs
-npx depo migrate json.sqlite --to bot.sqlite                        # quick.db, all tables
+npx zula migrate databases/db.json --to bot.sqlite                 # wio.db
+npx zula migrate croxydb/croxydb.json --from croxydb --to bot.sqlite  # croxydb, keeps TTLs
+npx zula migrate json.sqlite --to bot.sqlite                        # quick.db, all tables
 ```
 
 ```
@@ -226,7 +226,7 @@ Full results, machine details and method: [docs/benchmark.md](docs/benchmark.md)
 Windows (NT 10.0.26300), Intel i5-10600K, Node 24.22.0, median of 3 fresh processes. Lower
 is better; libraries at their default settings.
 
-| Workload | Depo | Depo `"normal"` | quick.db + better-sqlite3 | wio.db |
+| Workload | Zula | Zula `"normal"` | quick.db + better-sqlite3 | wio.db |
 |---|---:|---:|---:|---:|
 | `set()` 1 000 new keys | 2.19 s | 0.04 s | 7.43 s | 7.49 s |
 | `get()` 10 000 reads | 58 ms | 61 ms | 545 ms | 9 336 ms |
@@ -236,9 +236,9 @@ is better; libraries at their default settings.
 | `all()` over 10 000 keys, ×20 | 280 ms | 271 ms | 280 ms | **200 ms** |
 | open 10 000-key file + first `get()` | 7.6 ms | 7.0 ms | 23.8 ms | 38.3 ms |
 
-- Depo's default fsyncs every write (≈ 2.2 ms each on this disk); wio.db never
+- Zula's default fsyncs every write (≈ 2.2 ms each on this disk); wio.db never
   fsyncs, so its fair comparison is the `"normal"` column.
-- **Depo loses** on `all()` over many entries (wio.db parses one big JSON string
+- **Zula loses** on `all()` over many entries (wio.db parses one big JSON string
   instead of 10 000 small ones) and roughly ties wio.db on a single hot key at
   default durability.
 - Batching writes in `transaction()` is the biggest win: 600× faster than a loop.
@@ -260,7 +260,7 @@ is better; libraries at their default settings.
   (not a fair queue); same machine only, no network file systems.
 - JSON values only (no `BigInt`, `Map`, `Buffer`, `Date` objects).
 - Dual package: ESM and CommonJS builds are separate copies; compare
-  `error.name === "DepoError"` rather than `instanceof` if you mix both.
+  `error.name === "ZulaError"` rather than `instanceof` if you mix both.
 
 ## Development
 

@@ -36,10 +36,10 @@ const value = (i) => ({ id: i, name: `user${i}`, coins: i * 10, tags: ["a", "b"]
 /** Uniform adapter: sync libraries stay sync so they pay no `await` overhead. */
 async function open(name) {
   switch (name) {
-    case "depo":
-    case "depo-normal": {
-      const { Depo } = await import(dist("index.js"));
-      const db = new Depo(join(dir, "depo.sqlite"), name === "depo-normal" ? { synchronous: "normal" } : {});
+    case "zula":
+    case "zula-normal": {
+      const { Zula } = await import(dist("index.js"));
+      const db = new Zula(join(dir, "zula.sqlite"), name === "zula-normal" ? { synchronous: "normal" } : {});
       return {
         async: false,
         set: (k, v) => db.set(k, v),
@@ -50,7 +50,7 @@ async function open(name) {
         close: () => db.close(),
       };
     }
-    case "depo-quickdb": {
+    case "zula-quickdb": {
       const { QuickDB } = await import(dist("compat/quickdb.js"));
       const db = new QuickDB({ filePath: join(dir, "json.sqlite") });
       return {

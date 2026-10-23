@@ -1,7 +1,7 @@
 /**
  * quick.db v9 compatible API on node:sqlite.
  *
- *   const { QuickDB } = require("depo/quickdb"); // was: require("quick.db")
+ *   const { QuickDB } = require("zula/quickdb"); // was: require("quick.db")
  *
  * Reads and writes quick.db's own on-disk format (a `json.sqlite` file with one
  * `(ID TEXT PRIMARY KEY, json TEXT)` table per quick.db table), so an existing
@@ -14,7 +14,7 @@ import { castPath, lodashGet, lodashSet, lodashUnset } from "./lodash-path.js";
 export interface IQuickDBOptions {
   table?: string;
   filePath?: string;
-  /** Only Depo's own {@link SqliteDriver} / {@link MemoryDriver} are accepted. */
+  /** Only Zula's own {@link SqliteDriver} / {@link MemoryDriver} are accepted. */
   driver?: SqliteDriver;
   normalKeys?: boolean;
 }
@@ -174,7 +174,7 @@ export class QuickDB<D = any> {
 
   constructor(options: IQuickDBOptions = {}) {
     if (options.driver !== undefined && !(options.driver instanceof SqliteDriver)) {
-      throw new Error("depo/quickdb only supports its own SqliteDriver and MemoryDriver");
+      throw new Error("zula/quickdb only supports its own SqliteDriver and MemoryDriver");
     }
     const table = options.table ?? "json";
     const driver = options.driver ?? new SqliteDriver(options.filePath ?? "json.sqlite");

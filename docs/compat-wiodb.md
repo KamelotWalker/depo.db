@@ -1,8 +1,8 @@
-# wio.db compatibility (`depo/wiodb`)
+# wio.db compatibility (`zula/wiodb`)
 
 ```diff
 - const { JsonDatabase } = require("wio.db");
-+ const { JsonDatabase } = require("depo/wiodb");
++ const { JsonDatabase } = require("zula/wiodb");
 ```
 
 Reference: wio.db **4.0.22** (latest release, published 2021-12-27; registry metadata last changed 2022-05-24), API taken
@@ -10,7 +10,7 @@ from the published package (`src/JsonProvider.js`, `types/index.d.ts`).
 
 ## Where the data goes
 
-wio.db rewrites a whole JSON file on every write. Depo keeps the data in SQLite
+wio.db rewrites a whole JSON file on every write. Zula keeps the data in SQLite
 instead, in a file next to the configured JSON path:
 
 | `databasePath` | SQLite file |
@@ -25,8 +25,8 @@ is never modified or deleted; keep it as a backup. Pass `importJson: false` to
 start empty. The import runs in one transaction with a marker in the file, so
 two processes starting at once import exactly once.
 
-The SQLite file is a regular Depo database (namespace `default`): later you can
-switch to the native API with `new Depo("databases/db.sqlite")`.
+The SQLite file is a regular Zula database (namespace `default`): later you can
+switch to the native API with `new Zula("databases/db.sqlite")`.
 
 ## What is the same
 
@@ -54,7 +54,7 @@ at every step (list results compared after sorting, see difference 4).
 
 ## Intentional differences
 
-| # | wio.db 4.0.22 | depo/wiodb | Why |
+| # | wio.db 4.0.22 | zula/wiodb | Why |
 |---|---|---|---|
 | 1 | Data in a JSON file rewritten on every write | Data in SQLite next to it; JSON imported once (see above). `path` is the SQLite file; `jsonPath` added | Speed, crash safety |
 | 2 | Concurrent processes overwrite each other's writes | Every method is atomic across processes | Data loss |
@@ -63,7 +63,7 @@ at every step (list results compared after sorting, see difference 4).
 | 5 | `pull(key, fn)` without a match removes the last element | Removes nothing | Data loss bug |
 | 6 | `size` / `info.size` count `set`/`delete` calls of this process | Actual number of top-level keys | The original counter is meaningless |
 | 7 | `maxDataSize` compares against that counter (updates count too) | Limits the number of top-level keys; only creating a new key can exceed it | Same |
-| 8 | `info.version` is `"4.0.21"` | Depo's version | |
+| 8 | `info.version` is `"4.0.21"` | Zula's version | |
 | 9 | `autoWrite: false` skips writing (the change is lost) | Accepted and validated, but every write is persisted | No silent data loss |
 | 10 | `destroy()` deletes the JSON file | Closes the database and deletes the SQLite file (`-wal`/`-shm` too); the JSON file is kept | Data lives in SQLite |
 | 11 | `DatabaseError` messages are ANSI-coloured and followed by a Discord advertisement; `name` is coloured | Plain message, `name === "DatabaseError"` | |
@@ -72,10 +72,10 @@ at every step (list results compared after sorting, see difference 4).
 | 14 | `findAndDelete` deletes one key at a time | All deletions in one transaction | Atomicity |
 | 15 | `pull()` is typed as returning `V` | Typed `V \| false` (it returns `false` in both libraries) | Honest types |
 | 16 | — | `close()` added; `busyTimeout`, `synchronous`, `importJson` options added | |
-| 17 | Top-level keys containing a lone UTF-16 surrogate (`"a\uD800"`) are stored (JSON escapes them) | Throw `DepoError`; a wio.db JSON file with such a key is not imported | SQLite stores UTF-8, where such keys would merge and overwrite each other |
+| 17 | Top-level keys containing a lone UTF-16 surrogate (`"a\uD800"`) are stored (JSON escapes them) | Throw `ZulaError`; a wio.db JSON file with such a key is not imported | SQLite stores UTF-8, where such keys would merge and overwrite each other |
 
 ## Not supported
 
-- `YamlDatabase`. Depo has zero dependencies and therefore no YAML parser.
+- `YamlDatabase`. Zula has zero dependencies and therefore no YAML parser.
   Convert the YAML file to JSON (same structure) and use `JsonDatabase`, or run
-  `depo migrate` on the JSON.
+  `zula migrate` on the JSON.

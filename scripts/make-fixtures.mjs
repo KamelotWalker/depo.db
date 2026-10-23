@@ -83,7 +83,7 @@ rmSync(join(fixtures, "croxydb"), { recursive: true, force: true });
   db.set("text", "merhaba dünya");
   // TTL far in the future on a top-level key: carried over by the migrator.
   db.set("session_111", { token: "abc" }, { ttl: new Date("2099-01-01T00:00:00Z") });
-  // TTL on a nested key: croxydb tracks it by full path; Depo cannot express it.
+  // TTL on a nested key: croxydb tracks it by full path; Zula cannot express it.
   db.set("cooldown.312345678901234567", true, { ttl: new Date("2099-01-01T00:00:00Z") });
 }
 

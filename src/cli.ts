@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { DepoError } from "./errors.js";
+import { ZulaError } from "./errors.js";
 import { runMigration, type MigrationReport, type SourceFormat } from "./migrate.js";
 import { VERSION } from "./version.js";
 
-const USAGE = `Usage: depo migrate <source> [options]
+const USAGE = `Usage: zula migrate <source> [options]
 
-Imports a wio.db or croxydb JSON file, or a quick.db SQLite file, into a Depo
+Imports a wio.db or croxydb JSON file, or a quick.db SQLite file, into a Zula
 SQLite file. Safe to run repeatedly: entries already present with the same
 value are counted as unchanged.
 
@@ -14,7 +14,7 @@ Options:
   --from <format>     wio | croxydb | quickdb. Default: quickdb for SQLite files,
                       wio for anything else. Use croxydb to carry over TTLs from
                       the <name>.ttl.json sidecar.
-  --to <file>         Target Depo file. Default: depo.sqlite
+  --to <file>         Target Zula file. Default: zula.sqlite
   --namespace <name>  Target namespace for JSON sources. Default: default
   --table <name>      quick.db table to import; repeatable. Default: all tables.
                       Table "json" goes to namespace "default", any other table
@@ -78,11 +78,11 @@ function main(argv: string[]): number {
     console.log(USAGE);
     return values.help ? 0 : 1;
   }
-  if (command !== "migrate") throw new DepoError(`Unknown command ${JSON.stringify(command)}. Run depo --help.`);
-  if (source === undefined) throw new DepoError("Missing <source> file. Run depo --help.");
-  if (extra.length > 0) throw new DepoError(`Unexpected arguments: ${extra.join(" ")}`);
+  if (command !== "migrate") throw new ZulaError(`Unknown command ${JSON.stringify(command)}. Run zula --help.`);
+  if (source === undefined) throw new ZulaError("Missing <source> file. Run zula --help.");
+  if (extra.length > 0) throw new ZulaError(`Unexpected arguments: ${extra.join(" ")}`);
   if (values.from !== undefined && !isFormat(values.from)) {
-    throw new DepoError(`--from must be one of ${FORMATS.join(", ")}`);
+    throw new ZulaError(`--from must be one of ${FORMATS.join(", ")}`);
   }
 
   const report = runMigration({
@@ -101,9 +101,9 @@ function main(argv: string[]): number {
 try {
   process.exitCode = main(process.argv.slice(2));
 } catch (error) {
-  // DepoError and Node system/argument errors (they carry a `code`) are user-facing; anything else is a bug.
-  const expected = error instanceof Error && (error instanceof DepoError || "code" in error);
-  console.error(`depo: ${error instanceof Error ? error.message : String(error)}`);
+  // ZulaError and Node system/argument errors (they carry a `code`) are user-facing; anything else is a bug.
+  const expected = error instanceof Error && (error instanceof ZulaError || "code" in error);
+  console.error(`zula: ${error instanceof Error ? error.message : String(error)}`);
   if (!expected && error instanceof Error && error.stack) console.error(error.stack);
   process.exitCode = 1;
 }

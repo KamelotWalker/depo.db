@@ -1,6 +1,6 @@
 import * as sqlite from "node:sqlite";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { DepoError } from "./errors.js";
+import { ZulaError } from "./errors.js";
 
 export type SqliteDatabase = DatabaseSync;
 export type SqliteStatement = StatementSync;
@@ -69,7 +69,7 @@ function retryBusy<T>(fn: () => T, timeoutMs: number): T {
 }
 
 /**
- * One SQLite connection configured for Depo: WAL journal, chosen synchronous
+ * One SQLite connection configured for Zula: WAL journal, chosen synchronous
  * level, busy retries, and write transactions.
  *
  * Transactions use `BEGIN IMMEDIATE`, which takes SQLite's write lock before
@@ -89,11 +89,11 @@ export class Connection {
   constructor(path: string, options: ConnectionOptions = {}) {
     const busyTimeout = options.busyTimeout ?? DEFAULT_BUSY_TIMEOUT;
     if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
-      throw new DepoError("busyTimeout must be a non-negative integer (milliseconds)");
+      throw new ZulaError("busyTimeout must be a non-negative integer (milliseconds)");
     }
     const synchronous = options.synchronous ?? "full";
     if (synchronous !== "full" && synchronous !== "normal") {
-      throw new DepoError('synchronous must be "full" or "normal"');
+      throw new ZulaError('synchronous must be "full" or "normal"');
     }
     const readOnly = options.readOnly ?? false;
     this.busyTimeout = busyTimeout;
@@ -151,7 +151,7 @@ export class Connection {
   }
 
   #nested<T>(fn: () => T): T {
-    const name = `depo_sp_${this.#depth}`;
+    const name = `zula_sp_${this.#depth}`;
     this.db.exec(`SAVEPOINT ${name}`);
     this.#depth++;
     let result: T;
@@ -175,7 +175,7 @@ export class Connection {
 
 function assertSync(result: unknown): void {
   if (typeof result === "object" && result !== null && "then" in result && typeof result.then === "function") {
-    throw new DepoError(
+    throw new ZulaError(
       "Transaction callbacks must be synchronous: node:sqlite is synchronous and the transaction would commit before the promise settles",
     );
   }

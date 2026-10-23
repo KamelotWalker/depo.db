@@ -5,23 +5,23 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { Depo } from "../dist/esm/index.js";
+import { Zula } from "../dist/esm/index.js";
 import { readCroxyJson, runMigration } from "../dist/esm/migrate.js";
 import { CLI, FIXTURES, ROOT, sleep, tempDir } from "./helpers.mjs";
 
-function depo(...args) {
+function zula(...args) {
   const result = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 function migrateJson(...args) {
-  const run = depo("migrate", ...args, "--json");
+  const run = zula("migrate", ...args, "--json");
   assert.equal(run.code, 0, run.stderr);
   return JSON.parse(run.stdout);
 }
 
 function readAll(file, namespace) {
-  const db = new Depo(file, namespace ? { namespace } : {});
+  const db = new Zula(file, namespace ? { namespace } : {});
   try {
     return Object.fromEntries(db.all().map((e) => [e.key, e.value]));
   } finally {
@@ -31,7 +31,7 @@ function readAll(file, namespace) {
 
 test("wio.db JSON: imports every top-level key, idempotent on re-run", (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
   const source = join(FIXTURES, "wio", "db.json");
   const expected = JSON.parse(readFileSync(source, "utf8"));
   const keys = Object.keys(expected).length;
@@ -48,8 +48,8 @@ test("wio.db JSON: imports every top-level key, idempotent on re-run", (t) => {
 
 test("wio.db JSON: human-readable report and --namespace", (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
-  const run = depo("migrate", join(FIXTURES, "wio", "db.json"), "--to", target, "--namespace", "legacy");
+  const target = join(dir, "zula.sqlite");
+  const run = zula("migrate", join(FIXTURES, "wio", "db.json"), "--to", target, "--namespace", "legacy");
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /namespace "legacy": read 11, inserted 11, updated 0, unchanged 0, conflicts 0/);
   assert.match(run.stdout, /^Total: read 11, inserted 11/m);
@@ -59,9 +59,9 @@ test("wio.db JSON: human-readable report and --namespace", (t) => {
 
 test("conflicts are kept by default and replaced with --overwrite", (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
   const source = join(FIXTURES, "wio", "db.json");
-  const db = new Depo(target);
+  const db = new Zula(target);
   db.set("money_111", 1);
   db.set("unrelated", true);
   db.close();
@@ -70,7 +70,7 @@ test("conflicts are kept by default and replaced with --overwrite", (t) => {
   assert.equal(kept.total.conflicts, 1);
   assert.equal(kept.total.inserted, 10);
   assert.equal(readAll(target).money_111, 1);
-  const human = depo("migrate", source, "--to", target);
+  const human = zula("migrate", source, "--to", target);
   assert.match(human.stdout, /Re-run with --overwrite/);
 
   const replaced = migrateJson(source, "--to", target, "--overwrite");
@@ -82,7 +82,7 @@ test("conflicts are kept by default and replaced with --overwrite", (t) => {
 
 test("--dry-run reports without writing", (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
   const report = migrateJson(join(FIXTURES, "wio", "db.json"), "--to", target, "--dry-run");
   assert.equal(report.dryRun, true);
   assert.equal(report.total.inserted, 11);
@@ -93,14 +93,14 @@ test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) =>
   const dir = tempDir(t);
   const source = join(dir, "source.json");
   writeFileSync(source, JSON.stringify({ fresh: 1, live: 2 }));
-  // A Depo target with an expired row: opening it normally purges that row.
-  const target = join(dir, "depo.sqlite");
-  const db = new Depo(target);
+  // A Zula target with an expired row: opening it normally purges that row.
+  const target = join(dir, "zula.sqlite");
+  const db = new Zula(target);
   db.set("expired", 123, { ttl: 1 });
   db.set("live", 456);
   db.close();
   await sleep(20);
-  // A foreign SQLite file (rollback journal, no Depo schema): a real run adds the schema and switches it to WAL.
+  // A foreign SQLite file (rollback journal, no Zula schema): a real run adds the schema and switches it to WAL.
   const foreign = join(dir, "foreign.sqlite");
   const raw = new DatabaseSync(foreign);
   raw.exec("CREATE TABLE other (x); INSERT INTO other VALUES (1)");
@@ -115,12 +115,12 @@ test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) =>
     assert.equal(report.dryRun, true);
     assert.deepEqual(report.total, total);
     assert.ok(before.equals(readFileSync(file)), `${file} is unchanged`);
-    // A read-only connection to a WAL file may create an empty -wal (and a -shm); the next Depo close removes them.
+    // A read-only connection to a WAL file may create an empty -wal (and a -shm); the next Zula close removes them.
     assert.equal(existsSync(`${file}-wal`) ? statSync(`${file}-wal`).size : 0, 0, "nothing written to a WAL");
   }
   const check = new DatabaseSync(target, { readOnly: true });
   assert.deepEqual(
-    check.prepare("SELECT key, value FROM depo_entries ORDER BY key").all().map((row) => [row.key, row.value]),
+    check.prepare("SELECT key, value FROM zula_entries ORDER BY key").all().map((row) => [row.key, row.value]),
     [
       ["expired", "123"],
       ["live", "456"],
@@ -136,8 +136,8 @@ function writeAndExit(target, code) {
     [
       "--input-type=module",
       "-e",
-      `import { Depo } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist", "esm", "index.js")).href)};
-       const db = new Depo(process.argv[1]);
+      `import { Zula } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist", "esm", "index.js")).href)};
+       const db = new Zula(process.argv[1]);
        ${code}
        process.exit(0);`,
       target,
@@ -149,7 +149,7 @@ function writeAndExit(target, code) {
 
 test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchanged", async (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
   writeAndExit(target, `db.set("existing", 42); db.set("expired", 1, { ttl: 1 });`);
   await sleep(20);
   const source = join(dir, "source.json");
@@ -169,8 +169,8 @@ test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchange
 
 test("dry run: a writer that appears while it starts does not get its WAL checkpointed", (t) => {
   const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
-  new Depo(target).close();
+  const target = join(dir, "zula.sqlite");
+  new Zula(target).close();
   const source = join(dir, "source.json");
   writeFileSync(source, JSON.stringify({ concurrent: 42, fresh: 1 }));
   assert.equal(existsSync(`${target}-wal`), false);
@@ -198,7 +198,7 @@ test("quick.db SQLite: auto-detected, every table imported, json → default", (
   const dir = tempDir(t);
   const source = join(dir, "json.sqlite");
   copyFileSync(join(FIXTURES, "quickdb", "json.sqlite"), source);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
 
   const first = migrateJson(source, "--to", target);
   assert.equal(first.format, "quickdb");
@@ -219,7 +219,7 @@ test("quick.db SQLite: auto-detected, every table imported, json → default", (
     "dotted.key": "literal",
   });
   assert.deepStrictEqual(readAll(target, "economy"), { bank_111: 900, bank_222: 50 });
-  const db = new Depo(target);
+  const db = new Zula(target);
   assert.equal(db.get("dotted\\.key"), "literal", "literal dotted IDs stay addressable with escaping");
   db.close();
 
@@ -231,13 +231,13 @@ test("quick.db SQLite: --table selects tables; unknown tables fail", (t) => {
   const dir = tempDir(t);
   const source = join(dir, "json.sqlite");
   copyFileSync(join(FIXTURES, "quickdb", "json.sqlite"), source);
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
   const report = migrateJson(source, "--to", target, "--table", "economy");
   assert.deepEqual(report.groups.map((g) => g.namespace), ["economy"]);
-  const missing = depo("migrate", source, "--to", target, "--table", "nope");
+  const missing = zula("migrate", source, "--to", target, "--table", "nope");
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /no quick.db table "nope" \(found: economy, json\)/);
-  const misuse = depo("migrate", source, "--to", target, "--namespace", "x");
+  const misuse = zula("migrate", source, "--to", target, "--namespace", "x");
   assert.equal(misuse.code, 1);
   assert.match(misuse.stderr, /--namespace applies to JSON sources/);
 });
@@ -252,7 +252,7 @@ test("quick.db SQLite: tables whose names only resemble sqlite_ are imported", (
     "INSERT INTO json VALUES ('ordinary', '1'); INSERT INTO sqliteData VALUES ('balance', '900'); INSERT INTO sqlite1 VALUES ('x', 'true')",
   );
   raw.close();
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
 
   const report = migrateJson(source, "--to", target);
   assert.deepEqual(
@@ -273,14 +273,14 @@ test("croxydb JSON: same layout as wio.db; TTL sidecar carried over for top-leve
   const dir = tempDir(t);
   cpSync(join(FIXTURES, "croxydb"), dir, { recursive: true });
   const source = join(dir, "croxydb.json");
-  const target = join(dir, "depo.sqlite");
+  const target = join(dir, "zula.sqlite");
 
   const report = migrateJson(source, "--from", "croxydb", "--to", target);
   assert.equal(report.total.inserted, 6);
   assert.deepEqual(report.groups[0].warnings, [
-    'TTL on nested key "cooldown.312345678901234567" not carried over (Depo TTLs apply to whole entries)',
+    'TTL on nested key "cooldown.312345678901234567" not carried over (Zula TTLs apply to whole entries)',
   ]);
-  const db = new Depo(target);
+  const db = new Zula(target);
   assert.deepEqual(db.get("session_111"), { token: "abc" });
   const ttl = db.ttl("session_111");
   assert.ok(Math.abs(Date.now() + ttl - Date.UTC(2099, 0, 1)) < 5_000, "absolute expiry preserved");
@@ -291,7 +291,7 @@ test("croxydb JSON: same layout as wio.db; TTL sidecar carried over for top-leve
   // Without --from croxydb the file is read as plain wio.db JSON (no TTLs).
   const plain = migrateJson(source, "--to", join(dir, "plain.sqlite"));
   assert.equal(plain.format, "wio");
-  const plainDb = new Depo(join(dir, "plain.sqlite"));
+  const plainDb = new Zula(join(dir, "plain.sqlite"));
   assert.equal(plainDb.ttl("session_111"), null);
   plainDb.close();
 
@@ -309,7 +309,7 @@ test("croxydb JSON: encrypted files are refused with instructions", (t) => {
   const dir = tempDir(t);
   const source = join(dir, "croxydb.json");
   writeFileSync(source, "croxydb:v1:aaaa:bbbb:cccc");
-  const run = depo("migrate", source, "--from", "croxydb", "--to", join(dir, "depo.sqlite"));
+  const run = zula("migrate", source, "--from", "croxydb", "--to", join(dir, "zula.sqlite"));
   assert.equal(run.code, 1);
   assert.match(run.stderr, /encrypted by croxydb/);
 });
@@ -328,7 +328,7 @@ test("bad input fails with exit code 1 and a one-line message", (t) => {
   cases.push([["migrate", join(dir, "array.json"), "--to", join(dir, "t.sqlite")], /must contain a JSON object/]);
   cases.push([["migrate", join(dir, "broken.json"), "--to", join(dir, "t.sqlite")], /is not valid JSON/]);
   for (const [args, message] of cases) {
-    const run = depo(...args);
+    const run = zula(...args);
     assert.equal(run.code, 1, args.join(" "));
     assert.match(run.stderr, message);
     assert.doesNotMatch(run.stderr, /\n\s+at /, "no stack trace for expected errors");
@@ -336,10 +336,10 @@ test("bad input fails with exit code 1 and a one-line message", (t) => {
 });
 
 test("--help and --version", () => {
-  const help = depo("--help");
+  const help = zula("--help");
   assert.equal(help.code, 0);
-  assert.match(help.stdout, /Usage: depo migrate <source>/);
-  const version = depo("--version");
+  assert.match(help.stdout, /Usage: zula migrate <source>/);
+  const version = zula("--version");
   assert.equal(version.stdout.trim(), JSON.parse(readFileSync(new URL("../package.json", import.meta.url))).version);
 });
 

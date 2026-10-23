@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { DEFAULT_NAMESPACE } from "./depo.js";
-import { DepoError } from "./errors.js";
+import { DEFAULT_NAMESPACE } from "./zula.js";
+import { ZulaError } from "./errors.js";
 import { Connection, quoteIdentifier, type ConnectionOptions } from "./sqlite.js";
 import { Store } from "./store.js";
 
@@ -49,7 +49,7 @@ export interface MigrationOptions {
   source: string;
   /** Detected from the file header when omitted: SQLite → quickdb, otherwise wio JSON. */
   format?: SourceFormat;
-  /** Target Depo file. Default `depo.sqlite`. */
+  /** Target Zula file. Default `zula.sqlite`. */
   target?: string;
   /** Namespace for JSON sources. Default `"default"`. */
   namespace?: string;
@@ -68,7 +68,7 @@ export interface MigrationOptions {
 const SQLITE_HEADER = "SQLite format 3\u0000";
 const CROXYDB_ENCRYPTION_PREFIX = "croxydb:v1:";
 
-/** quick.db's default table name; imported into Depo's default namespace. */
+/** quick.db's default table name; imported into Zula's default namespace. */
 const QUICKDB_DEFAULT_TABLE = "json";
 
 export function detectFormat(file: string): SourceFormat {
@@ -87,10 +87,10 @@ function parseJsonObject(text: string, file: string): Record<string, unknown> {
   try {
     data = text.trim() === "" ? {} : JSON.parse(text);
   } catch (error) {
-    throw new DepoError(`${file} is not valid JSON`, { cause: error });
+    throw new ZulaError(`${file} is not valid JSON`, { cause: error });
   }
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
-    throw new DepoError(`${file} must contain a JSON object at the top level`);
+    throw new ZulaError(`${file} must contain a JSON object at the top level`);
   }
   // Copy into a typed record; Object.fromEntries keeps a literal "__proto__" key as an own property.
   return Object.fromEntries(Object.entries(data));
@@ -116,7 +116,7 @@ export function readWioJson(file: string, namespace: string = DEFAULT_NAMESPACE)
 export function readCroxyJson(file: string, namespace: string = DEFAULT_NAMESPACE, now: number = Date.now()): SourceGroup {
   const text = readJsonText(file);
   if (text.startsWith(CROXYDB_ENCRYPTION_PREFIX)) {
-    throw new DepoError(
+    throw new ZulaError(
       `${file} is encrypted by croxydb (encryptionKey). Open it with croxydb, call setEncryptionKey(null) to rewrite it unencrypted, then migrate.`,
     );
   }
@@ -127,12 +127,12 @@ export function readCroxyJson(file: string, namespace: string = DEFAULT_NAMESPAC
   if (existsSync(ttlFile)) {
     const ttlText = readJsonText(ttlFile);
     if (ttlText.startsWith(CROXYDB_ENCRYPTION_PREFIX)) {
-      throw new DepoError(`${ttlFile} is encrypted by croxydb; decrypt the database first.`);
+      throw new ZulaError(`${ttlFile} is encrypted by croxydb; decrypt the database first.`);
     }
     for (const [key, expiresAt] of Object.entries(parseJsonObject(ttlText, ttlFile))) {
       if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) continue;
       if (Object.hasOwn(data, key)) expiries.set(key, expiresAt);
-      else warnings.push(`TTL on nested key ${JSON.stringify(key)} not carried over (Depo TTLs apply to whole entries)`);
+      else warnings.push(`TTL on nested key ${JSON.stringify(key)} not carried over (Zula TTLs apply to whole entries)`);
     }
   }
   const entries: SourceEntry[] = [];
@@ -172,7 +172,7 @@ export function readQuickDb(file: string, tables?: readonly string[]): SourceGro
     const selected = tables === undefined || tables.length === 0 ? available : [...tables];
     for (const table of selected) {
       if (!available.includes(table)) {
-        throw new DepoError(`${file} has no quick.db table ${JSON.stringify(table)} (found: ${available.join(", ") || "none"})`);
+        throw new ZulaError(`${file} has no quick.db table ${JSON.stringify(table)} (found: ${available.join(", ") || "none"})`);
       }
     }
     return selected.map((table) => {
@@ -189,7 +189,7 @@ export function readQuickDb(file: string, tables?: readonly string[]): SourceGro
         try {
           value = JSON.parse(json);
         } catch (error) {
-          throw new DepoError(`quick.db row ${JSON.stringify(key)} in table ${JSON.stringify(table)} is not valid JSON`, {
+          throw new ZulaError(`quick.db row ${JSON.stringify(key)} in table ${JSON.stringify(table)} is not valid JSON`, {
             cause: error,
           });
         }
@@ -230,19 +230,19 @@ export function importEntries(
   return stats;
 }
 
-/** Imports a wio.db / croxydb JSON file or a quick.db SQLite file into a Depo file. Idempotent. */
+/** Imports a wio.db / croxydb JSON file or a quick.db SQLite file into a Zula file. Idempotent. */
 export function runMigration(options: MigrationOptions): MigrationReport {
   const source = options.source;
-  if (!existsSync(source)) throw new DepoError(`Source file not found: ${source}`);
+  if (!existsSync(source)) throw new ZulaError(`Source file not found: ${source}`);
   const format = options.format ?? detectFormat(source);
-  const target = options.target ?? "depo.sqlite";
+  const target = options.target ?? "zula.sqlite";
   const namespace = options.namespace ?? DEFAULT_NAMESPACE;
   const now = options.now ?? Date.now();
   if (format === "quickdb" && options.namespace !== undefined) {
-    throw new DepoError("--namespace applies to JSON sources; quick.db tables map to namespaces by name");
+    throw new ZulaError("--namespace applies to JSON sources; quick.db tables map to namespaces by name");
   }
   if (format !== "quickdb" && options.tables !== undefined && options.tables.length > 0) {
-    throw new DepoError("--table applies to quick.db sources only");
+    throw new ZulaError("--table applies to quick.db sources only");
   }
   const groups =
     format === "quickdb"

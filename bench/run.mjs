@@ -1,4 +1,4 @@
-// Reproducible benchmark: Depo vs quick.db (+ better-sqlite3) vs wio.db.
+// Reproducible benchmark: Zula vs quick.db (+ better-sqlite3) vs wio.db.
 //
 //   npm run bench            (builds first)
 //
@@ -23,9 +23,9 @@ const COLD_RUNS = 7;
 const CHILD_TIMEOUT_MS = 10 * 60_000;
 
 const LIBRARIES = [
-  ["depo", "Depo (default: WAL, synchronous FULL)"],
-  ["depo-normal", 'Depo (synchronous: "normal")'],
-  ["depo-quickdb", "depo/quickdb compat layer"],
+  ["zula", "Zula (default: WAL, synchronous FULL)"],
+  ["zula-normal", 'Zula (synchronous: "normal")'],
+  ["zula-quickdb", "zula/quickdb compat layer"],
   ["quickdb", "quick.db 9.1.7 + better-sqlite3"],
   ["wiodb", "wio.db 4.0.22"],
 ];
@@ -35,7 +35,7 @@ const WORKLOADS = [
   ["get", `get() ${SIZES.get} random reads over ${SIZES.getKeys} keys`],
   ["add", `add() ${SIZES.add} times on one hot key`],
   ["bulk-loop", `bulk insert ${SIZES.bulk} keys with a set() loop`],
-  ["bulk-tx", `bulk insert ${SIZES.bulk} keys in one transaction (Depo only: the others have no transaction API)`],
+  ["bulk-tx", `bulk insert ${SIZES.bulk} keys in one transaction (Zula only: the others have no transaction API)`],
   ["all", `all() over ${SIZES.coldKeys.toLocaleString("en-US")} keys, ${SIZES.allCalls} calls`],
 ];
 
@@ -69,16 +69,16 @@ const value = (i) => ({ id: i, name: `user${i}`, coins: i * 10, tags: ["a", "b"]
 /** Builds each library's on-disk format with SIZES.coldKeys entries, once. */
 async function prepareColdTemplates() {
   const templates = {};
-  const { Depo } = await import(new URL("../dist/esm/index.js", import.meta.url).href);
+  const { Zula } = await import(new URL("../dist/esm/index.js", import.meta.url).href);
   for (const [library] of LIBRARIES) {
     const dir = freshDir(`template-${library}`);
-    if (library.startsWith("depo") && library !== "depo-quickdb") {
-      const db = new Depo(join(dir, "depo.sqlite"));
+    if (library.startsWith("zula") && library !== "zula-quickdb") {
+      const db = new Zula(join(dir, "zula.sqlite"));
       db.transaction(() => {
         for (let i = 0; i < SIZES.coldKeys; i++) db.set(`user_${i}`, value(i));
       });
       db.close();
-    } else if (library === "depo-quickdb" || library === "quickdb") {
+    } else if (library === "zula-quickdb" || library === "quickdb") {
       // quick.db's own table layout, written directly through better-sqlite3.
       const Database = require("better-sqlite3");
       const db = new Database(join(dir, "json.sqlite"));
@@ -100,7 +100,7 @@ async function prepareColdTemplates() {
 
 function fileSizes(dir) {
   let total = 0;
-  for (const name of ["depo.sqlite", "json.sqlite", "db.json"]) {
+  for (const name of ["zula.sqlite", "json.sqlite", "db.json"]) {
     for (const suffix of ["", "-wal", "-shm"]) {
       const file = join(dir, name + suffix);
       if (existsSync(file)) total += statSync(file).size;
@@ -123,7 +123,7 @@ async function main() {
   for (const [workload] of WORKLOADS) {
     for (const [library] of LIBRARIES) {
       // Only the native API has transactions.
-      if (workload === "bulk-tx" && (library === "depo-quickdb" || !library.startsWith("depo"))) continue;
+      if (workload === "bulk-tx" && (library === "zula-quickdb" || !library.startsWith("zula"))) continue;
       const samples = [];
       for (let run = 0; run < RUNS; run++) {
         const dir = freshDir(`${library}-${workload}-${run}`);
@@ -187,9 +187,9 @@ function render(results) {
   for (const [workload, title] of WORKLOADS) {
     lines.push(`### ${title}`);
     lines.push("");
-    lines.push("| Library | Total ms | ops/s | vs Depo default |");
+    lines.push("| Library | Total ms | ops/s | vs Zula default |");
     lines.push("|---|---:|---:|---:|");
-    const base = results[`${workload}/depo`];
+    const base = results[`${workload}/zula`];
     for (const [library, label] of LIBRARIES) {
       const r = results[`${workload}/${library}`];
       if (r === undefined) continue;
@@ -211,7 +211,7 @@ function render(results) {
     lines.push(`| ${label} | ${fmt(r.libraryToFirstGetMs, 1)} | ${fmt(r.processToFirstGetMs, 1)} | ${fmt(r.bytes / 1024)} KiB |`);
   }
   lines.push("");
-  lines.push("“vs Depo default” > 1× means faster than Depo's default configuration, < 1× slower.");
+  lines.push("“vs Zula default” > 1× means faster than Zula's default configuration, < 1× slower.");
   return lines.join("\n");
 }
 

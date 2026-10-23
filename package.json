@@ -1,5 +1,5 @@
 {
-  "name": "depo",
+  "name": "zula",
   "version": "0.1.0",
   "private": true,
   "description": "Zero-dependency key-value database for Node.js on the built-in node:sqlite. Drop-in replacement for wio.db and quick.db without native modules.",
@@ -60,7 +60,7 @@
     }
   },
   "bin": {
-    "depo": "./dist/cjs/cli.js"
+    "zula": "./dist/cjs/cli.js"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",

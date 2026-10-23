@@ -1,15 +1,15 @@
 {
-  "set/depo": {
+  "set/zula": {
     "ms": 2190.4674999999997,
     "ops": 1000,
     "opsPerSec": 456.5235503379987
   },
-  "set/depo-normal": {
+  "set/zula-normal": {
     "ms": 38.1511,
     "ops": 1000,
     "opsPerSec": 26211.56401781338
   },
-  "set/depo-quickdb": {
+  "set/zula-quickdb": {
     "ms": 2207.3478999999998,
     "ops": 1000,
     "opsPerSec": 453.0323470985249
@@ -24,17 +24,17 @@
     "ops": 1000,
     "opsPerSec": 133.467379071047
   },
-  "get/depo": {
+  "get/zula": {
     "ms": 57.71720000000005,
     "ops": 10000,
     "opsPerSec": 173258.57803219825
   },
-  "get/depo-normal": {
+  "get/zula-normal": {
     "ms": 60.675099999999986,
     "ops": 10000,
     "opsPerSec": 164812.25412071843
   },
-  "get/depo-quickdb": {
+  "get/zula-quickdb": {
     "ms": 53.66190000000006,
     "ops": 10000,
     "opsPerSec": 186351.95548424465
@@ -49,17 +49,17 @@
     "ops": 10000,
     "opsPerSec": 1071.1229379745375
   },
-  "add/depo": {
+  "add/zula": {
     "ms": 2167.8853,
     "ops": 1000,
     "opsPerSec": 461.2790169295396
   },
-  "add/depo-normal": {
+  "add/zula-normal": {
     "ms": 35.7668,
     "ops": 1000,
     "opsPerSec": 27958.889249247903
   },
-  "add/depo-quickdb": {
+  "add/zula-quickdb": {
     "ms": 2185.0951,
     "ops": 1000,
     "opsPerSec": 457.64598529372927
@@ -74,17 +74,17 @@
     "ops": 1000,
     "opsPerSec": 501.19251240438945
   },
-  "bulk-loop/depo": {
+  "bulk-loop/zula": {
     "ms": 10874.0267,
     "ops": 5000,
     "opsPerSec": 459.81126752245325
   },
-  "bulk-loop/depo-normal": {
+  "bulk-loop/zula-normal": {
     "ms": 179.9797,
     "ops": 5000,
     "opsPerSec": 27780.910847167765
   },
-  "bulk-loop/depo-quickdb": {
+  "bulk-loop/zula-quickdb": {
     "ms": 10931.8141,
     "ops": 5000,
     "opsPerSec": 457.38062816124915
@@ -99,27 +99,27 @@
     "ops": 5000,
     "opsPerSec": 95.58781299278266
   },
-  "bulk-tx/depo": {
+  "bulk-tx/zula": {
     "ms": 17.891500000000008,
     "ops": 5000,
     "opsPerSec": 279462.3145068886
   },
-  "bulk-tx/depo-normal": {
+  "bulk-tx/zula-normal": {
     "ms": 17.04189999999999,
     "ops": 5000,
     "opsPerSec": 293394.5158697095
   },
-  "all/depo": {
+  "all/zula": {
     "ms": 279.72569999999996,
     "ops": 20,
     "opsPerSec": 71.49861453559684
   },
-  "all/depo-normal": {
+  "all/zula-normal": {
     "ms": 270.7218,
     "ops": 20,
     "opsPerSec": 73.87657735727231
   },
-  "all/depo-quickdb": {
+  "all/zula-quickdb": {
     "ms": 299.09270000000004,
     "ops": 20,
     "opsPerSec": 66.86890051144678
@@ -134,17 +134,17 @@
     "ops": 20,
     "opsPerSec": 100.24409436979045
   },
-  "cold/depo": {
+  "cold/zula": {
     "processToFirstGetMs": 34.5479,
     "libraryToFirstGetMs": 7.625499999999999,
     "bytes": 937984
   },
-  "cold/depo-normal": {
+  "cold/zula-normal": {
     "processToFirstGetMs": 34.6655,
     "libraryToFirstGetMs": 6.977499999999999,
     "bytes": 937984
   },
-  "cold/depo-quickdb": {
+  "cold/zula-quickdb": {
     "processToFirstGetMs": 38.2197,
     "libraryToFirstGetMs": 11.7055,
     "bytes": 983040

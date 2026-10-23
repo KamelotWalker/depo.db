@@ -182,7 +182,7 @@ test("intentional difference: delete() honours normalKeys", async (t) => {
   assert.deepEqual(await db.all(), []);
 });
 
-test("drivers: only Depo's own drivers are accepted; tables share the driver", async (t) => {
+test("drivers: only Zula's own drivers are accepted; tables share the driver", async (t) => {
   await assert.rejects(async () => new QuickDB({ driver: new Real.MemoryDriver() }), /only supports its own/);
   const driver = new SqliteDriver(join(tempDir(t), "d.sqlite"));
   onCleanup(t, () => driver.close());
