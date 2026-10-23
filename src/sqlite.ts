@@ -86,12 +86,7 @@ export class Connection {
   readonly #rollback: SqliteStatement;
   #depth = 0;
 
-  /**
-   * @param preview Dry-run mode: the journal mode is left unchanged and
-   * everything runs inside one immediate transaction that `close()` rolls back,
-   * so nothing done through this connection reaches the file.
-   */
-  constructor(path: string, options: ConnectionOptions = {}, preview = false) {
+  constructor(path: string, options: ConnectionOptions = {}) {
     const busyTimeout = options.busyTimeout ?? DEFAULT_BUSY_TIMEOUT;
     if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
       throw new DepoError("busyTimeout must be a non-negative integer (milliseconds)");
@@ -107,7 +102,7 @@ export class Connection {
     // write lock and keep SQLite's handler.
     this.db = new DatabaseClass(path, { readOnly, timeout: readOnly ? busyTimeout : 0 });
     try {
-      if (!readOnly && !preview && path !== ":memory:" && path !== "") {
+      if (!readOnly && path !== ":memory:" && path !== "") {
         // Changing the journal mode needs an exclusive lock; retried when several processes open a new file at once.
         retryBusy(() => {
           const row = this.db.prepare("PRAGMA journal_mode").get();
@@ -118,10 +113,6 @@ export class Connection {
       this.#begin = this.db.prepare("BEGIN IMMEDIATE");
       this.#commit = this.db.prepare("COMMIT");
       this.#rollback = this.db.prepare("ROLLBACK");
-      if (preview) {
-        retryBusy(() => this.#begin.run(), busyTimeout);
-        this.#depth = 1;
-      }
     } catch (error) {
       this.db.close();
       throw error;
@@ -177,9 +168,7 @@ export class Connection {
     return result;
   }
 
-  /** Closes the connection; an open transaction (always the case in preview mode) is rolled back. */
   close(): void {
-    if (this.db.isTransaction) this.#rollback.run();
     this.db.close();
   }
 }

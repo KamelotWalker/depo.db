@@ -40,13 +40,9 @@ export class Store {
   readonly #selectMeta: SqliteStatement;
   readonly #upsertMeta: SqliteStatement;
 
-  /**
-   * @param preview Dry run: every change, including schema creation and the
-   * startup purge, stays in one transaction that `close()` rolls back.
-   */
-  constructor(path: string, options: ConnectionOptions, preview = false) {
+  constructor(path: string, options: ConnectionOptions) {
     this.path = path;
-    this.#conn = new Connection(path, options, preview);
+    this.#conn = new Connection(path, options);
     const db = this.#conn.db;
     try {
       // Opening an existing file takes no write lock: under heavy write traffic from other
@@ -90,12 +86,12 @@ export class Store {
   }
 
   /**
-   * Copies the live entries of `namespaces` from the Depo file at `path` into
-   * this store. The file is read in one snapshot through a read-only
-   * connection, which never writes the main file or the WAL and never
+   * Copies the live rows for `keys` (namespace, key pairs) from the Depo file at
+   * `path` into this store. The file is read in one snapshot through a
+   * read-only connection, which never writes the main file or the WAL and never
    * checkpoints. A file without Depo's schema has nothing to copy.
    */
-  copyLiveFrom(path: string, options: ConnectionOptions, namespaces: Iterable<string>, now: number): void {
+  copyLiveFrom(path: string, options: ConnectionOptions, keys: Iterable<readonly [string, string]>, now: number): void {
     const source = new Connection(path, { ...options, readOnly: true });
     try {
       source.db.exec("BEGIN");
@@ -103,16 +99,17 @@ export class Store {
       if (version === undefined) return;
       checkVersion(path, version);
       const select = source.db.prepare(
-        "SELECT key, value, expires_at FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
       this.transaction(() => {
-        for (const ns of new Set(namespaces)) {
-          for (const row of select.iterate(ns, now)) {
-            this.#upsert.run(ns, String(row["key"]), String(row["value"]), row["expires_at"] ?? null);
-          }
+        for (const [ns, key] of keys) {
+          assertNames(ns, key);
+          const row = select.get(ns, key, now);
+          if (row !== undefined) this.#upsert.run(ns, key, String(row["value"]), row["expires_at"] ?? null);
         }
       });
     } finally {
+      if (source.db.isTransaction) source.db.exec("ROLLBACK");
       source.close();
     }
   }

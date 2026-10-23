@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -115,7 +115,8 @@ test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) =>
     assert.equal(report.dryRun, true);
     assert.deepEqual(report.total, total);
     assert.ok(before.equals(readFileSync(file)), `${file} is unchanged`);
-    assert.equal(existsSync(`${file}-wal`), false, "no WAL file left behind");
+    // A read-only connection to a WAL file may create an empty -wal (and a -shm); the next Depo close removes them.
+    assert.equal(existsSync(`${file}-wal`) ? statSync(`${file}-wal`).size : 0, 0, "nothing written to a WAL");
   }
   const check = new DatabaseSync(target, { readOnly: true });
   assert.deepEqual(
@@ -128,10 +129,8 @@ test("--dry-run leaves an existing target byte-for-byte unchanged", async (t) =>
   check.close();
 });
 
-test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchanged", async (t) => {
-  const dir = tempDir(t);
-  const target = join(dir, "depo.sqlite");
-  // A writer that exits without close() leaves its committed changes in the -wal file only.
+/** Runs `code` (with `db` open on `target`) in a child process that exits without close(), leaving its commits in the -wal file. */
+function writeAndExit(target, code) {
   const writer = spawnSync(
     process.execPath,
     [
@@ -139,14 +138,19 @@ test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchange
       "-e",
       `import { Depo } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist", "esm", "index.js")).href)};
        const db = new Depo(process.argv[1]);
-       db.set("existing", 42);
-       db.set("expired", 1, { ttl: 1 });
+       ${code}
        process.exit(0);`,
       target,
     ],
     { encoding: "utf8" },
   );
   assert.equal(writer.status, 0, writer.stderr);
+}
+
+test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchanged", async (t) => {
+  const dir = tempDir(t);
+  const target = join(dir, "depo.sqlite");
+  writeAndExit(target, `db.set("existing", 42); db.set("expired", 1, { ttl: 1 });`);
   await sleep(20);
   const source = join(dir, "source.json");
   writeFileSync(source, JSON.stringify({ existing: 42, expired: 2, fresh: 1 }));
@@ -161,6 +165,33 @@ test("--dry-run leaves a target with an uncheckpointed WAL and its -wal unchange
   assert.ok(before.equals(readFileSync(target)), "main file unchanged");
   assert.ok(walBefore.equals(readFileSync(`${target}-wal`)), "-wal unchanged (not checkpointed)");
   assert.equal(readAll(target).existing, 42);
+});
+
+test("dry run: a writer that appears while it starts does not get its WAL checkpointed", (t) => {
+  const dir = tempDir(t);
+  const target = join(dir, "depo.sqlite");
+  new Depo(target).close();
+  const source = join(dir, "source.json");
+  writeFileSync(source, JSON.stringify({ concurrent: 42, fresh: 1 }));
+  assert.equal(existsSync(`${target}-wal`), false);
+  // Deterministic interleaving: runMigration reads busyTimeout when it opens a connection, after it has
+  // looked at the target. At that moment another process commits and exits without closing.
+  let before;
+  let walBefore;
+  const connection = {
+    get busyTimeout() {
+      if (before === undefined) {
+        writeAndExit(target, `db.set("concurrent", 42);`);
+        before = readFileSync(target);
+        walBefore = readFileSync(`${target}-wal`);
+      }
+      return 5000;
+    },
+  };
+  const report = runMigration({ source, target, dryRun: true, connection });
+  assert.deepEqual(report.total, { read: 2, inserted: 1, updated: 0, unchanged: 1, conflicts: 0 });
+  assert.ok(before.equals(readFileSync(target)), "main file unchanged");
+  assert.ok(existsSync(`${target}-wal`) && walBefore.equals(readFileSync(`${target}-wal`)), "-wal unchanged (not checkpointed)");
 });
 
 test("quick.db SQLite: auto-detected, every table imported, json → default", (t) => {

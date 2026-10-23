@@ -251,21 +251,16 @@ export function runMigration(options: MigrationOptions): MigrationReport {
 
   const dryRun = options.dryRun ?? false;
   const connection = options.connection ?? {};
-  const targetExists = existsSync(target);
-  const hasSidecars = existsSync(`${target}-wal`) || existsSync(`${target}-shm`);
-  // Dry runs never change the target:
-  // - missing target: an empty in-memory store stands in, so the file is not created;
-  // - target with a -wal/-shm (another process has it open, or a writer exited without closing): its live
-  //   entries are copied into an in-memory store through a read-only connection. A writable connection would
-  //   checkpoint the WAL into the main file when it closes as the last connection;
-  // - otherwise: preview mode, where opening (schema creation, expired-row purge) and the import run in one
-  //   transaction that close() rolls back. Unlike a read-only connection it leaves no -wal/-shm behind.
-  const preview = dryRun && targetExists && !hasSidecars;
-  const store = new Store(dryRun && !preview ? ":memory:" : target, connection, preview);
+  // A dry run imports into an in-memory store and never opens the target writable: a writable connection
+  // could create the file, add the schema, purge expired rows, or checkpoint the WAL when it closes as the
+  // last connection. An existing target contributes the live rows of the keys being imported, read
+  // through a read-only connection; that is all importEntries looks at, so the counts match a real run.
+  const store = new Store(dryRun ? ":memory:" : target, connection);
   const reports: GroupReport[] = [];
   try {
-    if (dryRun && targetExists && hasSidecars) {
-      store.copyLiveFrom(target, connection, groups.map((group) => group.namespace), now);
+    if (dryRun && existsSync(target)) {
+      const keys = groups.flatMap((group) => group.entries.map((entry) => [group.namespace, entry.key] as const));
+      store.copyLiveFrom(target, connection, keys, now);
     }
     store.transaction(() => {
       for (const group of groups) {

@@ -205,23 +205,25 @@ promise settles.
 - Entries present with a *different* value are **kept** and reported as
   conflicts unless `--overwrite` is given. The safe default never destroys data
   written after a first migration.
-- The whole import is one transaction. `--dry-run` does not create a missing
-  target file (an empty in-memory database stands in). An existing target's
-  main file and `-wal` stay byte-for-byte unchanged:
-  - Without `-wal`/`-shm` files (no process has it open) it is opened in
-    preview mode: one transaction covers everything from opening (schema
-    creation, the expired-row purge) to the import and is rolled back on
-    close, and the journal mode is not switched to WAL. Closing deletes the
-    `-wal`/`-shm` files it created, as any last connection does.
-  - With them (a process has it open, or a writer exited without closing)
-    a writable connection would checkpoint the WAL into the main file when
-    it closes as the last connection. The live entries of the affected
-    namespaces are instead copied into an in-memory database through a
-    read-only connection, which never writes the main file or the WAL and
-    takes no write lock. Like every reader it may update the `-shm` file,
-    SQLite's shared-memory index of the WAL (read marks, or rebuilding it
-    after a writer crashed); it holds no data and SQLite rebuilds it from
-    the WAL.
+- The whole import is one transaction. `--dry-run` runs it against an
+  in-memory database and never opens the target writable: a writable
+  connection would create a missing file, add the schema, purge expired rows,
+  or checkpoint the WAL into the main file when it closes as the last
+  connection. For an existing target, the live rows of exactly the keys being
+  imported are copied first, from one snapshot read through a read-only
+  connection. That is everything the import compares against, so the report
+  matches a real run, and memory use does not grow with the target's size.
+  A read-only connection never writes the main file or the WAL, never
+  checkpoints, and takes no write lock, so a running bot is not blocked.
+  - Rejected: choosing a writable rolled-back "preview" when no `-wal`/`-shm`
+    exists. Between that check and opening, another process can commit and
+    exit without closing; the preview, now the last connection, then
+    checkpoints that process's WAL into the main file (reproduced).
+  - What a dry run may touch: like every SQLite reader, the read-only
+    connection may update the `-shm` file (SQLite's shared-memory index of
+    the WAL: read marks, or rebuilding it after a writer crashed). On a WAL
+    file that no process has open it creates an empty `-wal` and a `-shm`,
+    which the next Depo connection removes when it closes. Neither holds data.
 - quick.db tables are recognised by their layout (`ID` and `json` columns).
   Only SQLite's reserved `sqlite_` names are skipped; the `_` is escaped in
   the `LIKE` pattern, where it would otherwise match any character and also
