@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import { ZulaError } from "./errors.js";
+import { DepoError } from "./errors.js";
 import { deleteIn, formatKey, getIn, parseKey, setIn, typeName, type Key } from "./path.js";
 import type { ConnectionOptions } from "./sqlite.js";
 import { assertWellFormed, Store } from "./store.js";
 
-export interface ZulaOptions extends ConnectionOptions {
-  /** Namespace used by this instance. Default `"default"`. See {@link Zula.table}. */
+export interface DepoOptions extends ConnectionOptions {
+  /** Namespace used by this instance. Default `"default"`. See {@link Depo.table}. */
   namespace?: string;
 }
 
@@ -26,7 +26,7 @@ export interface Entry<T = unknown> {
   value: T;
 }
 
-export const DEFAULT_PATH = "zula.sqlite";
+export const DEFAULT_PATH = "depo.sqlite";
 export const DEFAULT_NAMESPACE = "default";
 
 // Set while `table()` constructs a view so the constructor reuses the parent's connection.
@@ -39,16 +39,16 @@ let sharedStore: Store | undefined;
  * path `set`, ...) runs in an immediate transaction, so it is atomic even when
  * several processes share the file.
  */
-export class Zula {
+export class Depo {
   readonly #store: Store;
   /** Namespace this instance reads and writes. */
   readonly namespace: string;
 
   /**
-   * @param path SQLite file path, or `":memory:"`. Default `"zula.sqlite"`.
+   * @param path SQLite file path, or `":memory:"`. Default `"depo.sqlite"`.
    * The parent directory must exist.
    */
-  constructor(path: string = DEFAULT_PATH, options: ZulaOptions = {}) {
+  constructor(path: string = DEFAULT_PATH, options: DepoOptions = {}) {
     const namespace = options.namespace ?? DEFAULT_NAMESPACE;
     assertNamespace(namespace);
     this.namespace = namespace;
@@ -69,11 +69,11 @@ export class Zula {
    * Returns a view of another namespace in the same file, sharing this
    * instance's connection. Keys in different namespaces never collide.
    */
-  table(namespace: string): Zula {
+  table(namespace: string): Depo {
     assertNamespace(namespace);
     sharedStore = this.#store;
     try {
-      return new Zula(this.#store.path, { namespace });
+      return new Depo(this.#store.path, { namespace });
     } finally {
       sharedStore = undefined;
     }
@@ -109,7 +109,7 @@ export class Zula {
       return value;
     }
     if (ttl !== undefined) {
-      throw new ZulaError(`TTL applies to whole entries; cannot set a TTL on the path ${formatKey([rowKey!, ...path])}`);
+      throw new DepoError(`TTL applies to whole entries; cannot set a TTL on the path ${formatKey([rowKey!, ...path])}`);
     }
     this.#modify(rowKey!, (root) => setIn(root, rowKey!, path, value));
     return value;
@@ -131,9 +131,9 @@ export class Zula {
   all<T = unknown>(options: AllOptions = {}): Entry<T>[] {
     const prefix = options.prefix ?? "";
     const limit = options.limit ?? -1;
-    if (typeof prefix !== "string") throw new ZulaError("prefix must be a string");
+    if (typeof prefix !== "string") throw new DepoError("prefix must be a string");
     if (options.limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
-      throw new ZulaError("limit must be a non-negative integer");
+      throw new DepoError("limit must be a non-negative integer");
     }
     return this.#store
       .list(this.namespace, Date.now(), prefix, limit)
@@ -157,16 +157,16 @@ export class Zula {
   /** Atomically adds `amount` to a number (missing counts as 0) and returns the result. */
   add(key: Key, amount: number): number {
     if (typeof amount !== "number" || !Number.isFinite(amount)) {
-      throw new ZulaError("amount must be a finite number");
+      throw new DepoError("amount must be a finite number");
     }
     const segments = parseKey(key);
     let result = 0;
     this.#modifyAt(segments, (current) => {
       if (current !== undefined && typeof current !== "number") {
-        throw new ZulaError(`Cannot add to ${formatKey(segments)}: its value is ${typeName(current)}, not a number`);
+        throw new DepoError(`Cannot add to ${formatKey(segments)}: its value is ${typeName(current)}, not a number`);
       }
       result = (current ?? 0) + amount;
-      if (!Number.isFinite(result)) throw new ZulaError(`Result for ${formatKey(segments)} is not a finite number`);
+      if (!Number.isFinite(result)) throw new DepoError(`Result for ${formatKey(segments)} is not a finite number`);
       return result;
     });
     return result;
@@ -175,7 +175,7 @@ export class Zula {
   /** Atomically subtracts `amount` from a number (missing counts as 0) and returns the result. */
   subtract(key: Key, amount: number): number {
     if (typeof amount !== "number" || !Number.isFinite(amount)) {
-      throw new ZulaError("amount must be a finite number");
+      throw new DepoError("amount must be a finite number");
     }
     return this.add(key, -amount);
   }
@@ -261,7 +261,7 @@ export class Zula {
   #entryKey(key: Key, method: string): string {
     const [rowKey, ...path] = parseKey(key);
     if (path.length > 0) {
-      throw new ZulaError(`${method}() applies to whole entries; ${formatKey([rowKey!, ...path])} is a path`);
+      throw new DepoError(`${method}() applies to whole entries; ${formatKey([rowKey!, ...path])} is a path`);
     }
     return rowKey!;
   }
@@ -296,7 +296,7 @@ const SKIP = Symbol("skip");
 
 function assertNamespace(namespace: string): void {
   if (typeof namespace !== "string" || namespace.length === 0) {
-    throw new ZulaError("namespace must be a non-empty string");
+    throw new DepoError("namespace must be a non-empty string");
   }
   assertWellFormed("Namespace", namespace);
 }
@@ -308,10 +308,10 @@ function assertNamespace(namespace: string): void {
  */
 function assertValue(value: unknown, key: Key): void {
   if (value === undefined) {
-    throw new ZulaError(`Cannot store undefined at ${typeof key === "string" ? key : formatKey(key)}; use delete() instead`);
+    throw new DepoError(`Cannot store undefined at ${typeof key === "string" ? key : formatKey(key)}; use delete() instead`);
   }
   if (typeof value === "function" || typeof value === "symbol") {
-    throw new ZulaError(
+    throw new DepoError(
       `Cannot store a ${typeof value} at ${typeof key === "string" ? key : formatKey(key)}: not JSON-serializable`,
     );
   }
@@ -319,7 +319,7 @@ function assertValue(value: unknown, key: Key): void {
 
 function expiryFromTtl(ttl: number): number {
   if (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl <= 0) {
-    throw new ZulaError("ttl must be a positive finite number of milliseconds");
+    throw new DepoError("ttl must be a positive finite number of milliseconds");
   }
   return Date.now() + Math.ceil(ttl);
 }
@@ -327,7 +327,7 @@ function expiryFromTtl(ttl: number): number {
 function arrayAt(current: unknown, segments: readonly string[], verb: string): unknown[] {
   if (current === undefined) return [];
   if (!Array.isArray(current)) {
-    throw new ZulaError(`Cannot ${verb} ${formatKey(segments)}: its value is ${typeName(current)}, not an array`);
+    throw new DepoError(`Cannot ${verb} ${formatKey(segments)}: its value is ${typeName(current)}, not an array`);
   }
   return current;
 }
@@ -337,10 +337,10 @@ function encode(value: unknown, rowKey: string): string {
   try {
     json = JSON.stringify(value);
   } catch (error) {
-    throw new ZulaError(`Value for ${JSON.stringify(rowKey)} is not JSON-serializable`, { cause: error });
+    throw new DepoError(`Value for ${JSON.stringify(rowKey)} is not JSON-serializable`, { cause: error });
   }
   if (json === undefined) {
-    throw new ZulaError(`Value for ${JSON.stringify(rowKey)} is not JSON-serializable (${typeof value})`);
+    throw new DepoError(`Value for ${JSON.stringify(rowKey)} is not JSON-serializable (${typeof value})`);
   }
   return json;
 }
@@ -349,6 +349,6 @@ function decode(json: string, rowKey: string): unknown {
   try {
     return JSON.parse(json);
   } catch (error) {
-    throw new ZulaError(`Stored value for ${JSON.stringify(rowKey)} is not valid JSON`, { cause: error });
+    throw new DepoError(`Stored value for ${JSON.stringify(rowKey)} is not valid JSON`, { cause: error });
   }
 }

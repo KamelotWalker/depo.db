@@ -1,4 +1,4 @@
-import { ZulaError } from "./errors.js";
+import { DepoError } from "./errors.js";
 
 /**
  * A key addresses one stored entry and, optionally, a path inside its JSON value.
@@ -14,16 +14,16 @@ export type Key = string | readonly string[];
 
 const INDEX_RE = /^(?:0|[1-9]\d*)$/;
 
-/** Splits a key into its segments. Throws `ZulaError` for empty segments or bad escapes. */
+/** Splits a key into its segments. Throws `DepoError` for empty segments or bad escapes. */
 export function parseKey(key: Key): string[] {
   if (typeof key === "string") return parseStringKey(key);
   if (!Array.isArray(key) || key.length === 0) {
-    throw new ZulaError("Key must be a non-empty string or a non-empty array of strings");
+    throw new DepoError("Key must be a non-empty string or a non-empty array of strings");
   }
   const segments: string[] = [];
   for (const segment of key) {
     if (typeof segment !== "string" || segment.length === 0) {
-      throw new ZulaError("Every key segment must be a non-empty string");
+      throw new DepoError("Every key segment must be a non-empty string");
     }
     segments.push(segment);
   }
@@ -40,7 +40,7 @@ function parseStringKey(key: string): string[] {
     if (ch === "\\") {
       const next = key[i + 1];
       if (next !== "." && next !== "\\") {
-        throw new ZulaError(`Invalid escape in key ${JSON.stringify(key)}: only "\\." and "\\\\" are allowed`);
+        throw new DepoError(`Invalid escape in key ${JSON.stringify(key)}: only "\\." and "\\\\" are allowed`);
       }
       current += next;
       i++;
@@ -56,7 +56,7 @@ function parseStringKey(key: string): string[] {
 }
 
 function pushSegment(segments: string[], segment: string, key: string): void {
-  if (segment.length === 0) throw new ZulaError(`Empty segment in key ${JSON.stringify(key)}`);
+  if (segment.length === 0) throw new DepoError(`Empty segment in key ${JSON.stringify(key)}`);
   segments.push(segment);
 }
 
@@ -108,11 +108,11 @@ function assignOwn(target: Record<string, unknown>, segment: string, value: unkn
 function assignChild(container: Record<string, unknown> | unknown[], segment: string, value: unknown, where: string): void {
   if (Array.isArray(container)) {
     if (!INDEX_RE.test(segment)) {
-      throw new ZulaError(`Cannot set ${JSON.stringify(segment)} on the array at ${where}: segment is not an array index`);
+      throw new DepoError(`Cannot set ${JSON.stringify(segment)} on the array at ${where}: segment is not an array index`);
     }
     const index = Number(segment);
     if (index > container.length) {
-      throw new ZulaError(`Cannot set index ${index} on the array at ${where}: length is ${container.length}, holes are not allowed`);
+      throw new DepoError(`Cannot set index ${index} on the array at ${where}: length is ${container.length}, holes are not allowed`);
     }
     container[index] = value;
   } else {
@@ -130,7 +130,7 @@ export function setIn(root: unknown, rowKey: string, path: readonly string[], va
   if (path.length === 0) return value;
   const top = root === undefined ? {} : root;
   if (!isContainer(top)) {
-    throw new ZulaError(`Cannot set a path inside ${JSON.stringify(rowKey)}: its value is ${typeName(top)}, not an object`);
+    throw new DepoError(`Cannot set a path inside ${JSON.stringify(rowKey)}: its value is ${typeName(top)}, not an object`);
   }
   let container: Record<string, unknown> | unknown[] = top;
   const walked = [rowKey];
@@ -146,7 +146,7 @@ export function setIn(root: unknown, rowKey: string, path: readonly string[], va
       next = existing;
     } else {
       walked.push(segment);
-      throw new ZulaError(`Cannot set a path through ${formatKey(walked)}: its value is ${typeName(existing)}, not an object`);
+      throw new DepoError(`Cannot set a path through ${formatKey(walked)}: its value is ${typeName(existing)}, not an object`);
     }
     walked.push(segment);
     container = next;

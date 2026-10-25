@@ -7,45 +7,45 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
 const require = createRequire(import.meta.url);
 
 test("package.json invariants", async () => {
-  const { VERSION } = await import("zula");
+  const { VERSION } = await import("depo.db");
   assert.equal(VERSION, pkg.version);
-  assert.equal(pkg.name, "zula");
-  assert.deepEqual(pkg.bin, { zula: "dist/cjs/cli.js" });
+  assert.equal(pkg.name, "depo.db");
+  assert.deepEqual(pkg.bin, { depo: "dist/cjs/cli.js" });
   assert.equal(pkg.dependencies, undefined, "zero runtime dependencies");
   assert.equal(pkg.engines.node, ">=24.15.0");
 });
 
 test("every entry point loads through the exports map in ESM and CJS", async () => {
-  const esm = await import("zula");
-  const cjs = require("zula");
+  const esm = await import("depo.db");
+  const cjs = require("depo.db");
   for (const mod of [esm, cjs]) {
-    assert.deepEqual(Object.keys(mod).sort(), ["DEFAULT_NAMESPACE", "DEFAULT_PATH", "VERSION", "Zula", "ZulaError", "escapeKey"]);
-    assert.equal(mod.DEFAULT_PATH, "zula.sqlite");
-    assert.equal(new mod.ZulaError("invalid").name, "ZulaError");
-    assert.equal(typeof mod.Zula, "function");
-    assert.equal(typeof mod.ZulaError, "function");
+    assert.deepEqual(Object.keys(mod).sort(), ["DEFAULT_NAMESPACE", "DEFAULT_PATH", "Depo", "DepoError", "VERSION", "escapeKey"]);
+    assert.equal(mod.DEFAULT_PATH, "depo.sqlite");
+    assert.equal(new mod.DepoError("invalid").name, "DepoError");
+    assert.equal(typeof mod.Depo, "function");
+    assert.equal(typeof mod.DepoError, "function");
     assert.equal(typeof mod.escapeKey, "function");
-    const db = new mod.Zula(":memory:");
+    const db = new mod.Depo(":memory:");
     db.set("k", 1);
     assert.equal(db.add("k", 1), 2);
     db.close();
   }
-  for (const mod of [await import("zula/quickdb"), require("zula/quickdb")]) {
+  for (const mod of [await import("depo.db/quickdb"), require("depo.db/quickdb")]) {
     assert.deepEqual(Object.keys(mod).sort(), ["MemoryDriver", "QuickDB", "SqliteDriver"]);
     const db = new mod.QuickDB({ driver: new mod.MemoryDriver() });
     assert.equal(await db.add("k", 2), 2);
     db.driver.close();
   }
-  for (const mod of [await import("zula/wiodb"), require("zula/wiodb")]) {
+  for (const mod of [await import("depo.db/wiodb"), require("depo.db/wiodb")]) {
     assert.deepEqual(Object.keys(mod).sort(), ["DatabaseError", "JsonDatabase"]);
   }
-  assert.throws(() => require("zula/dist/cjs/store.js"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+  assert.throws(() => require("depo.db/dist/cjs/store.js"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 });
 
 test("loading the package prints no warnings (no ExperimentalWarning on Node >= 24.15)", async () => {
   const { spawnSync } = await import("node:child_process");
-  for (const code of ['require("zula")', 'require("zula/quickdb")', 'require("zula/wiodb")']) {
-    const run = spawnSync(process.execPath, ["-e", `${code}; new (require("zula").Zula)(":memory:").close()`], {
+  for (const code of ['require("depo.db")', 'require("depo.db/quickdb")', 'require("depo.db/wiodb")']) {
+    const run = spawnSync(process.execPath, ["-e", `${code}; new (require("depo.db").Depo)(":memory:").close()`], {
       cwd: new URL("..", import.meta.url),
       encoding: "utf8",
     });

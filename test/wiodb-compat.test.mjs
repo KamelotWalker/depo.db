@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Zula } from "../dist/esm/index.js";
+import { Depo } from "../dist/esm/index.js";
 import { DatabaseError, JsonDatabase } from "../dist/esm/compat/wiodb.js";
 import { FIXTURES, onCleanup, tempDir } from "./helpers.mjs";
 
@@ -156,8 +156,8 @@ test("imports an existing wio.db JSON file once, without touching it", (t) => {
   assert.equal(again.get("money_111"), 800);
   again.close();
 
-  // The same file is a regular Zula database in the default namespace.
-  const native = new Zula(join(dir, "db.sqlite"));
+  // The same file is a regular Depo database in the default namespace.
+  const native = new Depo(join(dir, "db.sqlite"));
   assert.equal(native.get("user.312345678901234567.level"), 7);
   native.close();
 });

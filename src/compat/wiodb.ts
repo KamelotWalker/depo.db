@@ -1,17 +1,17 @@
 /**
  * wio.db v4 compatible `JsonDatabase` on node:sqlite.
  *
- *   const { JsonDatabase } = require("zula/wiodb"); // was: require("wio.db")
+ *   const { JsonDatabase } = require("depo.db/wiodb"); // was: require("wio.db")
  *
  * Data lives in a SQLite file next to the configured JSON path
- * (`databases/db.json` → `databases/db.sqlite`), in Zula's own format and the
- * `default` namespace, so the same file can later be opened with `new Zula()`.
+ * (`databases/db.json` → `databases/db.sqlite`), in Depo's own format and the
+ * `default` namespace, so the same file can later be opened with `new Depo()`.
  * On first open an existing wio.db JSON file is imported once; the JSON file is
  * left untouched. Differences from wio.db 4.0.22 are listed in docs/compat-wiodb.md.
  */
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
-import { DEFAULT_NAMESPACE } from "../zula.js";
+import { DEFAULT_NAMESPACE } from "../depo.js";
 import { importEntries, readWioJson } from "../migrate.js";
 import type { ConnectionOptions } from "../sqlite.js";
 import { Store } from "../store.js";
@@ -119,7 +119,7 @@ export class JsonDatabase<V> {
 
   /**
    * Splits a wio.db key into the top-level key and the lodash path below it.
-   * A key with a lone surrogate can never be a stored row (Zula rejects such row
+   * A key with a lone surrogate can never be a stored row (Depo rejects such row
    * keys), so it is not probed as one; its surrogate may sit in a JSON-only segment.
    */
   #resolve(key: string): [string, string[]] {

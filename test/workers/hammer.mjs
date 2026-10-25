@@ -3,7 +3,7 @@
 // Waits until <startAt> (epoch ms) so all workers collide, then hammers one file.
 // A short random pause after each iteration releases the write lock so the
 // workers interleave instead of running one after another.
-import { Zula } from "../../dist/esm/index.js";
+import { Depo } from "../../dist/esm/index.js";
 import { QuickDB, SqliteDriver } from "../../dist/esm/compat/quickdb.js";
 import { JsonDatabase } from "../../dist/esm/compat/wiodb.js";
 
@@ -19,7 +19,7 @@ const BUSY_TIMEOUT = 60_000;
 while (Date.now() < startAt) await new Promise((resolve) => setTimeout(resolve, 1));
 
 if (mode === "native") {
-  const db = new Zula(file, { busyTimeout: BUSY_TIMEOUT });
+  const db = new Depo(file, { busyTimeout: BUSY_TIMEOUT });
   const bank = db.table("bank");
   for (let i = 0; i < iterations; i++) {
     db.add("counter", 1);
@@ -35,7 +35,7 @@ if (mode === "native") {
   db.close();
 } else if (mode === "naive") {
   // Deliberately unsafe read-then-write without a transaction (control group).
-  const db = new Zula(file, { busyTimeout: BUSY_TIMEOUT });
+  const db = new Depo(file, { busyTimeout: BUSY_TIMEOUT });
   for (let i = 0; i < iterations; i++) {
     const current = db.get("counter", 0);
     db.set("counter", current + 1);

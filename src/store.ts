@@ -1,4 +1,4 @@
-import { ZulaError } from "./errors.js";
+import { DepoError } from "./errors.js";
 import { Connection, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "./sqlite.js";
 
 export const SCHEMA_VERSION = 1;
@@ -16,10 +16,10 @@ export interface RawEntry {
 }
 
 /**
- * One SQLite connection plus the prepared statements for Zula's schema.
- * Shared by every namespace view (`Zula#table`) opened from the same `Zula`.
+ * One SQLite connection plus the prepared statements for Depo's schema.
+ * Shared by every namespace view (`Depo#table`) opened from the same `Depo`.
  *
- * Schema: a single `zula_entries` table keyed by `(ns, key)`. Namespaces are a
+ * Schema: a single `depo_entries` table keyed by `(ns, key)`. Namespaces are a
  * column, not separate SQL tables, so no identifier is ever built from user input.
  */
 export class Store {
@@ -50,33 +50,33 @@ export class Store {
       const version = this.#conn.run(() => readSchemaVersion(db));
       if (version === undefined) this.#conn.transaction(() => this.#migrate());
       else checkVersion(path, version);
-      this.#selectRow = db.prepare("SELECT value, expires_at FROM zula_entries WHERE ns = ? AND key = ?");
+      this.#selectRow = db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
       this.#upsert = db.prepare(
-        "INSERT INTO zula_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
+        "INSERT INTO depo_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
           "ON CONFLICT (ns, key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
       );
       this.#deleteLive = db.prepare(
-        "DELETE FROM zula_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "DELETE FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
       this.#selectAll = db.prepare(
-        "SELECT key, value FROM zula_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
+        "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
       );
       this.#selectPrefix = db.prepare(
-        "SELECT key, value FROM zula_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) " +
+        "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) " +
           "AND key >= ? AND key < ? ORDER BY key LIMIT ?",
       );
       this.#countLive = db.prepare(
-        "SELECT count(*) AS n FROM zula_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT count(*) AS n FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#deleteNamespace = db.prepare("DELETE FROM zula_entries WHERE ns = ?");
-      this.#purge = db.prepare("DELETE FROM zula_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
-      this.#anyExpired = db.prepare("SELECT 1 FROM zula_entries WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT 1");
+      this.#deleteNamespace = db.prepare("DELETE FROM depo_entries WHERE ns = ?");
+      this.#purge = db.prepare("DELETE FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ?");
+      this.#anyExpired = db.prepare("SELECT 1 FROM depo_entries WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT 1");
       this.#setExpiry = db.prepare(
-        "UPDATE zula_entries SET expires_at = ? WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "UPDATE depo_entries SET expires_at = ? WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#selectMeta = db.prepare("SELECT value FROM zula_meta WHERE key = ?");
+      this.#selectMeta = db.prepare("SELECT value FROM depo_meta WHERE key = ?");
       this.#upsertMeta = db.prepare(
-        "INSERT INTO zula_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        "INSERT INTO depo_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       );
       if (!(options.readOnly ?? false)) this.purgeExpired(Date.now());
     } catch (error) {
@@ -86,10 +86,10 @@ export class Store {
   }
 
   /**
-   * Copies the live rows for `keys` (namespace, key pairs) from the Zula file at
+   * Copies the live rows for `keys` (namespace, key pairs) from the Depo file at
    * `path` into this store. The file is read in one snapshot through a
    * read-only connection, which never writes the main file or the WAL and never
-   * checkpoints. A file without Zula's schema has nothing to copy.
+   * checkpoints. A file without Depo's schema has nothing to copy.
    */
   copyLiveFrom(path: string, options: ConnectionOptions, keys: Iterable<readonly [string, string]>, now: number): void {
     const source = new Connection(path, { ...options, readOnly: true });
@@ -99,7 +99,7 @@ export class Store {
       if (version === undefined) return;
       checkVersion(path, version);
       const select = source.db.prepare(
-        "SELECT value, expires_at FROM zula_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
+        "SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
       this.transaction(() => {
         for (const [ns, key] of keys) {
@@ -116,23 +116,23 @@ export class Store {
 
   #migrate(): void {
     this.#conn.db.exec(`
-      CREATE TABLE IF NOT EXISTS zula_meta (
+      CREATE TABLE IF NOT EXISTS depo_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       ) WITHOUT ROWID;
-      CREATE TABLE IF NOT EXISTS zula_entries (
+      CREATE TABLE IF NOT EXISTS depo_entries (
         ns TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         expires_at INTEGER,
         PRIMARY KEY (ns, key)
       ) WITHOUT ROWID;
-      CREATE INDEX IF NOT EXISTS zula_entries_expires_at ON zula_entries (expires_at) WHERE expires_at IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
     `);
     const version = readSchemaVersion(this.#conn.db);
     if (version === undefined) {
       this.#conn.db
-        .prepare("INSERT INTO zula_meta (key, value) VALUES ('schema_version', ?)")
+        .prepare("INSERT INTO depo_meta (key, value) VALUES ('schema_version', ?)")
         .run(String(SCHEMA_VERSION));
     } else {
       checkVersion(this.path, version);
@@ -151,13 +151,13 @@ export class Store {
 
   /** Runs one statement; throws a clear error instead of node:sqlite's "statement has been finalized" once closed. */
   #run<T>(fn: () => T): T {
-    if (this.#closed) throw new ZulaError("The database is closed");
+    if (this.#closed) throw new DepoError("The database is closed");
     return this.#conn.run(fn);
   }
 
   /** Runs `fn` in an immediate transaction (savepoint when nested). */
   transaction<T>(fn: () => T): T {
-    if (this.#closed) throw new ZulaError("The database is closed");
+    if (this.#closed) throw new DepoError("The database is closed");
     return this.#conn.transaction(fn);
   }
 
@@ -177,7 +177,7 @@ export class Store {
     if (row === undefined) return undefined;
     const value = row["value"];
     const expiresAt = row["expires_at"];
-    if (typeof value !== "string") throw new ZulaError(`Corrupt row ${JSON.stringify(key)}: value is not text`);
+    if (typeof value !== "string") throw new DepoError(`Corrupt row ${JSON.stringify(key)}: value is not text`);
     if (typeof expiresAt === "number") {
       return expiresAt > now ? { value, expiresAt } : undefined;
     }
@@ -227,20 +227,20 @@ export class Store {
   }
 }
 
-/** Schema version when all of Zula's tables exist, else `undefined`. */
+/** Schema version when all of Depo's tables exist, else `undefined`. */
 function readSchemaVersion(db: SqliteDatabase): number | undefined {
   const objects = db
-    .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('zula_meta', 'zula_entries', 'zula_entries_expires_at')")
+    .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_meta', 'depo_entries', 'depo_entries_expires_at')")
     .get();
   if (Number(objects?.["n"]) !== 3) return undefined;
-  const row = db.prepare("SELECT value FROM zula_meta WHERE key = 'schema_version'").get();
+  const row = db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
   return row === undefined ? undefined : Number(row["value"]);
 }
 
 function checkVersion(path: string, version: number): void {
   if (version > SCHEMA_VERSION) {
-    throw new ZulaError(
-      `${path} uses Zula schema version ${version}; this version of Zula only understands ${SCHEMA_VERSION}. Upgrade Zula.`,
+    throw new DepoError(
+      `${path} uses Depo schema version ${version}; this version of Depo only understands ${SCHEMA_VERSION}. Upgrade Depo.`,
     );
   }
 }
@@ -252,7 +252,7 @@ function checkVersion(path: string, version: number): void {
  */
 export function assertWellFormed(what: string, name: string): void {
   if (!name.isWellFormed()) {
-    throw new ZulaError(
+    throw new DepoError(
       `${what} ${JSON.stringify(name)} contains a lone UTF-16 surrogate; SQLite cannot store it without merging it with other names`,
     );
   }

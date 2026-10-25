@@ -1,6 +1,6 @@
 # Design decisions
 
-Where several reasonable options existed, Zula picks the boring, safe one. Each
+Where several reasonable options existed, Depo picks the boring, safe one. Each
 entry says what was chosen, what was rejected, and why.
 
 ## 1. Storage: one SQLite file, one table
@@ -8,21 +8,21 @@ entry says what was chosen, what was rejected, and why.
 Data lives in a single table:
 
 ```sql
-CREATE TABLE zula_entries (
+CREATE TABLE depo_entries (
   ns         TEXT NOT NULL,     -- namespace, see `table()`
   key        TEXT NOT NULL,     -- first key segment
   value      TEXT NOT NULL,     -- JSON text
   expires_at INTEGER,           -- epoch ms, NULL = never
   PRIMARY KEY (ns, key)
 ) WITHOUT ROWID;
-CREATE INDEX zula_entries_expires_at ON zula_entries (expires_at) WHERE expires_at IS NOT NULL;
-CREATE TABLE zula_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;  -- schema_version = 1
+CREATE INDEX depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
+CREATE TABLE depo_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;  -- schema_version = 1
 ```
 
 - **Namespaces are a column, not SQL tables.** quick.db creates one SQL table per
   `table()` name and interpolates the name into SQL. A column needs no dynamic
   identifiers, so no user string ever becomes SQL.
-- **Schema version** is stored in `zula_meta`. A file written by a newer schema
+- **Schema version** is stored in `depo_meta`. A file written by a newer schema
   is refused with a clear error instead of being misread.
 - Opening an existing file only reads; the schema is created inside a write
   transaction only when it is missing (see §7 for why that matters).
@@ -35,7 +35,7 @@ Rejected: SQLite JSONB, `v8.serialize`, structured clone.
   `migrate` is a straight copy.
 - The file stays inspectable with any SQLite tool.
 - Consequences, all documented in the README: `undefined`, functions, symbols
-  and BigInt are rejected with `ZulaError`; `Date` becomes an ISO string;
+  and BigInt are rejected with `DepoError`; `Date` becomes an ISO string;
   `NaN`/`Infinity` become `null` (plain `JSON.stringify` behaviour).
 - The value passed to a path `set` or to `push` is checked *before* it is
   embedded in the entry: once inside an object or array, `JSON.stringify` would
@@ -55,14 +55,14 @@ Rejected: SQLite JSONB, `v8.serialize`, structured clone.
 - The *first segment is the SQLite row*. Only that part is indexed; paths are
   resolved in JavaScript after reading the row.
 - Entry keys (the first segment) and namespaces must be well-formed Unicode: a
-  lone UTF-16 surrogate (`"a\uD800"`) throws `ZulaError`. SQLite stores text as
+  lone UTF-16 surrogate (`"a\uD800"`) throws `DepoError`. SQLite stores text as
   UTF-8, which has no encoding for it and substitutes U+FFFD, so `"a\uD800"`
   and `"a\uD801"` would address the same row and overwrite each other. The
   check sits in the storage layer, so the wio.db layer and `migrate` get it
   too. Path segments after the first are unaffected: they live inside the
-  JSON value, which escapes surrogates losslessly (also in `zula/wiodb`, whose
+  JSON value, which escapes surrogates losslessly (also in `depo.db/wiodb`, whose
   `get("obj.\uD800")` works like wio.db's). Rejected: a lossless
-  encoding of such keys. Other readers of the file (SQLite tools, older Zula
+  encoding of such keys. Other readers of the file (SQLite tools, older Depo
   versions) would see the encoded form, and a lone surrogate in a key is
   almost always a bug, such as a string cut in the middle of an emoji.
 
@@ -116,7 +116,7 @@ synchronous core.
   Node 24.15.0 (6 processes, each running 150 iterations of three fsynced write
   transactions with a 0–1 ms pause per iteration): with SQLite's handler the
   slowest single operation waited **4.2 s**, and in the multi-process test one
-  worker hit the 5 s timeout. Zula therefore sets SQLite's busy timeout to 0 on
+  worker hit the 5 s timeout. Depo therefore sets SQLite's busy timeout to 0 on
   writable connections and retries `SQLITE_BUSY` itself every 1–2 ms (with
   jitter) until `busyTimeout` (default 5000 ms) runs out. In the same
   measurement the slowest operation then waited **1.8 s** (worst of 3 runs;
@@ -178,16 +178,16 @@ promise settles.
 
 ## 11. Compatibility layers
 
-- **quick.db** (`zula/quickdb`) reads and writes quick.db's own on-disk format
+- **quick.db** (`depo.db/quickdb`) reads and writes quick.db's own on-disk format
   (`json.sqlite`, one `(ID, json)` table per table name). Switching the
   `require` line needs no data conversion and stays reversible: the file
   remains readable by quick.db. Behaviour is checked operation by operation
   against the real quick.db 9.1.7 (`test/quickdb-compat.test.mjs`).
-- **wio.db** (`zula/wiodb`) cannot keep wio.db's format (rewriting a JSON file on
-  every call is the problem being solved). It stores into a Zula file next to
+- **wio.db** (`depo.db/wiodb`) cannot keep wio.db's format (rewriting a JSON file on
+  every call is the problem being solved). It stores into a Depo file next to
   the JSON path and imports the JSON file once, inside a write transaction and
-  guarded by a marker in `zula_meta`, so concurrent first opens import exactly
-  once. The JSON file is never modified. The result is a regular Zula file
+  guarded by a marker in `depo_meta`, so concurrent first opens import exactly
+  once. The JSON file is never modified. The result is a regular Depo file
   (`default` namespace) that the native API can open later. Behaviour is checked
   against the real wio.db 4.0.22 (`test/wiodb-compat.test.mjs`).
 - Path handling in both layers is a port of the relevant lodash 4.17.21
@@ -223,7 +223,7 @@ promise settles.
     connection may update the `-shm` file (SQLite's shared-memory index of
     the WAL: read marks, or rebuilding it after a writer crashed). On a WAL
     file that no process has open it creates an empty `-wal` and a `-shm`,
-    which the next Zula connection removes when it closes. Neither holds data.
+    which the next Depo connection removes when it closes. Neither holds data.
 - quick.db tables are recognised by their layout (`ID` and `json` columns).
   Only SQLite's reserved `sqlite_` names are skipped; the `_` is escaped in
   the `LIKE` pattern, where it would otherwise match any character and also
@@ -243,7 +243,7 @@ promise settles.
 | 22.5.0 | Added behind `--experimental-sqlite` |
 | 22.13.0 / 23.4.0 | No flag needed, still Stability 1.1 "Active development"; prints `ExperimentalWarning: SQLite is an experimental feature` on load |
 | 24.15.0 / 25.7.0 | Stability 1.2 "Release candidate"; the warning is gone ([nodejs/node#61262](https://github.com/nodejs/node/pull/61262), which removes the `emitExperimentalWarning('SQLite')` call) |
-| 26.11.0 | `DatabaseSync` renamed `Database`; old name is a documentation-only deprecation (DEP0210). Zula uses `Database` when it exists |
+| 26.11.0 | `DatabaseSync` renamed `Database`; old name is a documentation-only deprecation (DEP0210). Depo uses `Database` when it exists |
 
 Sources: [SQLite docs, history table](https://nodejs.org/api/sqlite.html),
 [v24.x docs](https://nodejs.org/docs/latest-v24.x/api/sqlite.html) ("v24.15.0 SQLite is now a release candidate"),
@@ -253,14 +253,14 @@ Sources: [SQLite docs, history table](https://nodejs.org/api/sqlite.html),
 Verified locally with the official Windows x64 builds:
 
 - v22.23.4 (latest 22.x) and v24.14.1: loading `node:sqlite` prints the
-  `ExperimentalWarning`. Zula itself works on both.
+  `ExperimentalWarning`. Depo itself works on both.
 - v24.15.0: no warning; the full test suite passes.
-- APIs Zula relies on beyond the basics (`timeout` constructor option,
+- APIs Depo relies on beyond the basics (`timeout` constructor option,
   `isTransaction`) exist since v24.0.0 / v22.16.0.
 
 A warning printed on every bot start, on a module the Node project itself
 labels experimental, is the "stability blocker", so `engines` is
-`>=24.15.0`. Node 22 users can run Zula but get the warning and are not
+`>=24.15.0`. Node 22 users can run Depo but get the warning and are not
 supported.
 
 ## 14. Packaging
@@ -274,17 +274,21 @@ supported.
   tarball into a scratch project and runs ESM, CommonJS and TypeScript
   (nodenext, node16, bundler) consumers.
 - Dual-package hazard: ESM and CJS copies are separate module instances, so a
-  `ZulaError` thrown by the CJS build is not `instanceof` the ESM `ZulaError`.
-  Check `error.name === "ZulaError"` when mixing both.
+  `DepoError` thrown by the CJS build is not `instanceof` the ESM `DepoError`.
+  Check `error.name === "DepoError"` when mixing both.
 - The native API does not create parent directories (SQLite's behaviour); the
   wio.db layer does, because wio.db did.
 
-## 15. Package name: zula (2026-10-23)
+## 15. Package name: depo.db (2026-10-25)
 
-The owner chose the bare npm name `zula` on 2026-10-23, after checking that it
-was available on the npm registry. "Zula" is Turkish slang for a stash.
-Known risk: "Zula" is also the name of a popular Turkish FPS game, which may
-cause confusion or a trademark objection. The owner accepted this risk.
-The rename was a clean cutover before the first publication, with no old-name
-aliases or compatibility shims.
+The working name was Depo. On 2026-10-23 it was renamed to `zula`.
+On 2026-10-25 the first `npm publish` of `zula` was rejected by the npm
+registry with HTTP 403: the name was too similar to zuul, bull, bulma and gulp.
+The bare npm name `depo` is taken by an unrelated package, last published in
+2022. The owner chose `depo.db`, following the wio.db / quick.db naming the
+audience already knows, and the brand returned to Depo. This also removes the
+confusion risk with the Zula game.
+
+Both renames happened before the first publication, as clean cutovers without
+old-name aliases or compatibility shims.
 

@@ -1,15 +1,15 @@
 {
-  "name": "zula",
+  "name": "depo.db",
   "version": "0.1.0",
   "description": "Zero-dependency key-value database for Node.js on the built-in node:sqlite. Drop-in replacement for wio.db and quick.db without native modules.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KamelotWalker/zula.git"
+    "url": "git+https://github.com/KamelotWalker/depo.db.git"
   },
-  "homepage": "https://github.com/KamelotWalker/zula#readme",
+  "homepage": "https://github.com/KamelotWalker/depo.db#readme",
   "bugs": {
-    "url": "https://github.com/KamelotWalker/zula/issues"
+    "url": "https://github.com/KamelotWalker/depo.db/issues"
   },
   "type": "module",
   "engines": {
@@ -67,7 +67,7 @@
     }
   },
   "bin": {
-    "zula": "dist/cjs/cli.js"
+    "depo": "dist/cjs/cli.js"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",

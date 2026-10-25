@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Zula } from "../dist/esm/index.js";
+import { Depo } from "../dist/esm/index.js";
 import { QuickDB } from "../dist/esm/compat/quickdb.js";
 import { JsonDatabase } from "../dist/esm/compat/wiodb.js";
 import { onCleanup, ROOT, tempDir } from "./helpers.mjs";
@@ -40,14 +40,14 @@ function expectedList() {
 
 test("native API: add, push, path add and transactions are atomic across processes", async (t) => {
   const file = join(tempDir(t), "shared.sqlite");
-  const setup = new Zula(file);
+  const setup = new Depo(file);
   setup.table("bank").set("alice", 1_000_000);
   setup.table("bank").set("bob", 0);
   setup.close();
 
   await hammer("native", file);
 
-  const db = new Zula(file);
+  const db = new Depo(file);
   const total = WORKERS * ITERATIONS;
   assert.equal(db.get("counter"), total, "no lost add()");
   assert.deepEqual([...db.get("list")].sort(), expectedList(), "no lost or duplicated push()");
@@ -61,7 +61,7 @@ test("native API: add, push, path add and transactions are atomic across process
 test("control: unsynchronised get-then-set from several processes is not atomic", async (t) => {
   const file = join(tempDir(t), "naive.sqlite");
   await hammer("naive", file);
-  const db = new Zula(file);
+  const db = new Depo(file);
   const counter = db.get("counter");
   db.close();
   // Proves the workers really overlap: without a transaction, updates get lost
@@ -118,7 +118,7 @@ async function addWhileLocked(db, holdMs, clockStep) {
 
 test("busyTimeout is measured on the monotonic clock: wall-clock steps neither stretch nor cut it", async (t) => {
   const dir = tempDir(t);
-  const short = new Zula(join(dir, "short.sqlite"), { busyTimeout: 100 });
+  const short = new Depo(join(dir, "short.sqlite"), { busyTimeout: 100 });
   onCleanup(t, () => short.close());
   short.set("counter", 0);
   // Clock set back 10 s: a wall-clock deadline would keep waiting until the 1.5 s lock is released.
@@ -127,7 +127,7 @@ test("busyTimeout is measured on the monotonic clock: wall-clock steps neither s
   assert.ok(back.elapsed < 1000, `gave up after ${Math.round(back.elapsed)} ms`);
   assert.equal(short.get("counter"), 0);
 
-  const long = new Zula(join(dir, "long.sqlite"), { busyTimeout: 5000 });
+  const long = new Depo(join(dir, "long.sqlite"), { busyTimeout: 5000 });
   onCleanup(t, () => long.close());
   long.set("counter", 0);
   // Clock set forward 10 s: a wall-clock deadline would give up long before the 300 ms lock is released.

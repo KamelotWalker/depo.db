@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Zula, ZulaError, escapeKey } from "../dist/esm/index.js";
+import { Depo, DepoError, escapeKey } from "../dist/esm/index.js";
 import { onCleanup, sleep, tempDir } from "./helpers.mjs";
 
 function open(t, options) {
-  const db = new Zula(join(tempDir(t), "db.sqlite"), options);
+  const db = new Depo(join(tempDir(t), "db.sqlite"), options);
   onCleanup(t, () => db.close());
   return db;
 }
@@ -70,7 +70,7 @@ test("all() orders by key and supports prefix and limit", (t) => {
     { key: "user_10", value: 7 },
   ]);
   assert.deepEqual(db.all({ prefix: "nope" }), []);
-  assert.throws(() => db.all({ limit: -1 }), ZulaError);
+  assert.throws(() => db.all({ limit: -1 }), DepoError);
 });
 
 test("dot paths read and write inside values", (t) => {
@@ -125,9 +125,9 @@ test("escaped dots and array keys address literal keys", (t) => {
 test("invalid keys are rejected", (t) => {
   const db = open(t);
   for (const key of ["", ".a", "a.", "a..b", "a\\x", "trailing\\", [], [""], ["a", ""]]) {
-    assert.throws(() => db.get(key), ZulaError, `key ${JSON.stringify(key)}`);
+    assert.throws(() => db.get(key), DepoError, `key ${JSON.stringify(key)}`);
   }
-  assert.throws(() => db.get(5), ZulaError);
+  assert.throws(() => db.get(5), DepoError);
 });
 
 test("keys and namespaces with lone UTF-16 surrogates are rejected instead of colliding", (t) => {
@@ -136,7 +136,7 @@ test("keys and namespaces with lone UTF-16 surrogates are rejected instead of co
   const first = "tenant_\ud800";
   const second = "tenant_\ud801";
   assert.throws(() => db.table(first), /lone UTF-16 surrogate/);
-  assert.throws(() => new Zula(db.path, { namespace: second }), /lone UTF-16 surrogate/);
+  assert.throws(() => new Depo(db.path, { namespace: second }), /lone UTF-16 surrogate/);
   for (const key of ["key_\ud800", ["key_\udc00", "path"], "key_\ud801.path"]) {
     assert.throws(() => db.set(key, 1), /lone UTF-16 surrogate/, `set ${JSON.stringify(key)}`);
     assert.throws(() => db.get(key), /lone UTF-16 surrogate/, `get ${JSON.stringify(key)}`);
@@ -269,7 +269,7 @@ test("TTL: path writes keep the TTL, whole-entry set replaces it", (t) => {
 test("purgeExpired removes expired rows from disk", async (t) => {
   const dir = tempDir(t);
   const file = join(dir, "db.sqlite");
-  const db = new Zula(file);
+  const db = new Depo(file);
   db.set("a", 1, { ttl: 10 });
   db.set("b", 1, { ttl: 10 });
   db.set("c", 1);
@@ -277,7 +277,7 @@ test("purgeExpired removes expired rows from disk", async (t) => {
   assert.equal(db.purgeExpired(), 2);
   db.close();
   const raw = new DatabaseSync(file);
-  assert.equal(raw.prepare("SELECT count(*) AS n FROM zula_entries").get().n, 1);
+  assert.equal(raw.prepare("SELECT count(*) AS n FROM depo_entries").get().n, 1);
   raw.close();
 });
 
@@ -291,11 +291,11 @@ test("namespaces isolate keys and share one connection", (t) => {
   assert.equal(economy.namespace, "economy");
   assert.equal(economy.deleteAll(), 1);
   assert.equal(db.get("x"), "default");
-  const sameFile = new Zula(db.path, { namespace: "economy" });
+  const sameFile = new Depo(db.path, { namespace: "economy" });
   economy.set("y", 1);
   assert.equal(sameFile.get("y"), 1);
   sameFile.close();
-  assert.throws(() => db.table(""), ZulaError);
+  assert.throws(() => db.table(""), DepoError);
 });
 
 test("transaction commits atomically, rolls back on error, nests with savepoints", (t) => {
@@ -349,14 +349,14 @@ test("transaction rejects async callbacks and rolls back", async (t) => {
 
 test("data persists across reopen; closed instances throw", (t) => {
   const file = join(tempDir(t), "db.sqlite");
-  const first = new Zula(file);
+  const first = new Depo(file);
   first.set("k", { v: 1 });
   first.table("other").set("k", 2);
   first.close();
   assert.equal(first.closed, true);
   assert.throws(() => first.get("k"), /closed/);
   first.close();
-  const second = new Zula(file);
+  const second = new Depo(file);
   assert.deepEqual(second.get("k"), { v: 1 });
   assert.equal(second.table("other").get("k"), 2);
   second.close();
@@ -364,14 +364,14 @@ test("data persists across reopen; closed instances throw", (t) => {
 
 test("connection uses WAL, busy timeout and the chosen synchronous level", (t) => {
   const dir = tempDir(t);
-  const full = new Zula(join(dir, "full.sqlite"));
+  const full = new Depo(join(dir, "full.sqlite"));
   full.close();
   const raw = new DatabaseSync(join(dir, "full.sqlite"));
   assert.equal(raw.prepare("PRAGMA journal_mode").get().journal_mode, "wal");
   raw.close();
-  assert.throws(() => new Zula(join(dir, "x.sqlite"), { synchronous: "off" }), /synchronous/);
-  assert.throws(() => new Zula(join(dir, "x.sqlite"), { busyTimeout: -1 }), /busyTimeout/);
-  const memory = new Zula(":memory:", { synchronous: "normal" });
+  assert.throws(() => new Depo(join(dir, "x.sqlite"), { synchronous: "off" }), /synchronous/);
+  assert.throws(() => new Depo(join(dir, "x.sqlite"), { busyTimeout: -1 }), /busyTimeout/);
+  const memory = new Depo(":memory:", { synchronous: "normal" });
   memory.set("a", 1);
   assert.equal(memory.get("a"), 1);
   memory.close();
@@ -379,9 +379,9 @@ test("connection uses WAL, busy timeout and the chosen synchronous level", (t) =
 
 test("refuses files written by a newer schema version", (t) => {
   const file = join(tempDir(t), "db.sqlite");
-  new Zula(file).close();
+  new Depo(file).close();
   const raw = new DatabaseSync(file);
-  raw.prepare("UPDATE zula_meta SET value = '99' WHERE key = 'schema_version'").run();
+  raw.prepare("UPDATE depo_meta SET value = '99' WHERE key = 'schema_version'").run();
   raw.close();
-  assert.throws(() => new Zula(file), /schema version 99/);
+  assert.throws(() => new Depo(file), /schema version 99/);
 });

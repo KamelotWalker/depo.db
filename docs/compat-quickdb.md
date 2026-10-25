@@ -1,8 +1,8 @@
-# quick.db compatibility (`zula/quickdb`)
+# quick.db compatibility (`depo.db/quickdb`)
 
 ```diff
 - const { QuickDB } = require("quick.db");
-+ const { QuickDB } = require("zula/quickdb");
++ const { QuickDB } = require("depo.db/quickdb");
 ```
 
 Reference: quick.db **9.1.7** (latest release, published 2023-07-10), API taken
@@ -28,7 +28,7 @@ from the published package (`out/index.js`, `out/index.d.ts`,
   `"Missing second argument (value)"`, ...), thrown as plain `Error`.
 - **On-disk format.** The same `json.sqlite` file with the same
   `(ID TEXT PRIMARY KEY, json TEXT)` table per quick.db table. Existing files
-  open without conversion, and files written by Zula stay readable by quick.db.
+  open without conversion, and files written by Depo stay readable by quick.db.
 
 `test/quickdb-compat.test.mjs` runs a 75-step scenario against the real
 quick.db 9.1.7 and the compat layer and requires identical results and error
@@ -36,7 +36,7 @@ messages at every step.
 
 ## Intentional differences
 
-| # | quick.db 9.1.7 | zula/quickdb | Why |
+| # | quick.db 9.1.7 | depo.db/quickdb | Why |
 |---|---|---|---|
 | 1 | Needs the native `better-sqlite3` module | Uses built-in `node:sqlite` | The point of the package |
 | 2 | Read-modify-write methods (`add`, `sub`, `push`, `unshift`, `pop`, `shift`, `pull`, dotted `set`/`delete`) are a separate read and write; two calls can interleave, even inside one process | Each runs in one immediate SQLite transaction; atomic across processes | Lost updates |
@@ -45,7 +45,7 @@ messages at every step.
 | 5 | `delete("a.b")` treats the key as a path even with `normalKeys: true` (and creates row `a`) | With `normalKeys`, deletes the literal key `a.b` | Bug; contradicts `get`/`set` |
 | 6 | `pop`/`shift` resolve before their write is done | The write completes first | Ordering |
 | 7 | Table names are pasted into SQL | Table names are quoted | Names with quotes/spaces broke or injected SQL |
-| 8 | Drivers: `SqliteDriver` (better-sqlite3), `MemoryDriver` (Map), `JSONDriver`, `MongoDriver`, `MySQLDriver`, `PostgresDriver` | Only `SqliteDriver` (node:sqlite) and `MemoryDriver` (in-memory SQLite). Passing any other driver throws. The driver-related types (`IDriver`, `Table`, `DataLike`, `Config`, `CollectionInterface`) are not exported | Out of scope; Zula is SQLite only |
+| 8 | Drivers: `SqliteDriver` (better-sqlite3), `MemoryDriver` (Map), `JSONDriver`, `MongoDriver`, `MySQLDriver`, `PostgresDriver` | Only `SqliteDriver` (node:sqlite) and `MemoryDriver` (in-memory SQLite). Passing any other driver throws. The driver-related types (`IDriver`, `Table`, `DataLike`, `Config`, `CollectionInterface`) are not exported | Out of scope; Depo is SQLite only |
 | 9 | `createSingleton()` throws unless a driver is passed | Creates the instance with the given options | quick.db's check made the default driver unusable |
 | 10 | `driver.database` is a better-sqlite3 `Database` | It is a `node:sqlite` `DatabaseSync` (different API). `driver.close()` added | Different engine |
 | 11 | `SqliteDriver.setRowByKey(..., update)` runs `UPDATE` or `INSERT` depending on `update` | Always upserts; `update` is ignored | Race-free |

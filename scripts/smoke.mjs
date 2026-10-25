@@ -36,10 +36,10 @@ npm(["install", "--no-audit", "--no-fund", "--offline", tarball], app);
 
 writeFileSync(
   join(app, "esm.mjs"),
-  `import { Zula } from "zula";
-import { QuickDB } from "zula/quickdb";
-import { JsonDatabase } from "zula/wiodb";
-const db = new Zula("esm.sqlite");
+  `import { Depo } from "depo.db";
+import { QuickDB } from "depo.db/quickdb";
+import { JsonDatabase } from "depo.db/wiodb";
+const db = new Depo("esm.sqlite");
 db.set("user.1.name", "Ayşe");
 db.add("coins", 5);
 const q = new QuickDB({ filePath: "esm-quick.sqlite" });
@@ -52,11 +52,11 @@ db.close(); q.driver.close(); w.close();
 );
 writeFileSync(
   join(app, "cjs.cjs"),
-  `const { Zula } = require("zula");
-const { QuickDB } = require("zula/quickdb");
-const { JsonDatabase } = require("zula/wiodb");
+  `const { Depo } = require("depo.db");
+const { QuickDB } = require("depo.db/quickdb");
+const { JsonDatabase } = require("depo.db/wiodb");
 (async () => {
-  const db = new Zula("cjs.sqlite");
+  const db = new Depo("cjs.sqlite");
   db.push("list", 1, 2);
   const q = new QuickDB({ filePath: "cjs-quick.sqlite" });
   await q.push("list", 1, 2);
@@ -69,11 +69,11 @@ const { JsonDatabase } = require("zula/wiodb");
 );
 writeFileSync(
   join(app, "consumer.ts"),
-  `import { Zula, ZulaError, escapeKey, type Entry, type Key, type ZulaOptions } from "zula";
-import { QuickDB, MemoryDriver } from "zula/quickdb";
-import { JsonDatabase, type Schema } from "zula/wiodb";
-const options: ZulaOptions = { synchronous: "normal" };
-const db = new Zula(":memory:", options);
+  `import { Depo, DepoError, escapeKey, type Entry, type Key, type DepoOptions } from "depo.db";
+import { QuickDB, MemoryDriver } from "depo.db/quickdb";
+import { JsonDatabase, type Schema } from "depo.db/wiodb";
+const options: DepoOptions = { synchronous: "normal" };
+const db = new Depo(":memory:", options);
 const key: Key = ["a", escapeKey("b.c")];
 const n: number = db.add(key, 1);
 const entries: Entry<number>[] = db.all<number>();
@@ -81,14 +81,14 @@ const q = new QuickDB<number>({ driver: new MemoryDriver() });
 const p: Promise<number | null> = q.get("x");
 const w = new JsonDatabase<number>({ databasePath: "x.json" });
 const rows: Schema<number>[] = w.all();
-export { n, entries, p, rows, ZulaError };
+export { n, entries, p, rows, DepoError };
 `,
 );
 
 console.log(run(process.execPath, ["esm.mjs"], app).trim());
 console.log(run(process.execPath, ["cjs.cjs"], app).trim());
-assert.match(npm(["exec", "--offline", "--", "zula", "--help"], app), /^Usage: zula migrate <source>/);
-console.log("zula --help ok");
+assert.match(npm(["exec", "--offline", "--", "depo", "--help"], app), /^Usage: depo migrate <source>/);
+console.log("depo --help ok");
 
 const tsc = join(root, "node_modules", "typescript", "bin", "tsc");
 for (const [module, moduleResolution] of [
