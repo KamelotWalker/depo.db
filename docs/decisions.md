@@ -285,6 +285,6 @@ The owner chose the bare npm name `zula` on 2026-10-23, after checking that it
 was available on the npm registry. "Zula" is Turkish slang for a stash.
 Known risk: "Zula" is also the name of a popular Turkish FPS game, which may
 cause confusion or a trademark objection. The owner accepted this risk.
-The package remains unpublished and private; the rename is a clean cutover
-with no old-name aliases or compatibility shims.
+The rename was a clean cutover before the first publication, with no old-name
+aliases or compatibility shims.
 

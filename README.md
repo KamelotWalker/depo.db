@@ -9,8 +9,6 @@ Zula is meant as the successor to [wio.db](https://www.npmjs.com/package/wio.db)
 and compile yourself). Both have drop-in compatibility entry points, so moving
 over is a one-line change.
 
-> The final package name is `zula`. It is not published yet (`"private": true`).
-
 - Synchronous API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Dot paths into stored objects: `db.add("user.42.coins", 10)`
 - TTL per entry, namespaces, multi-key transactions

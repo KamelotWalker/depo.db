@@ -11,7 +11,6 @@ test("package.json invariants", async () => {
   assert.equal(VERSION, pkg.version);
   assert.equal(pkg.name, "zula");
   assert.deepEqual(pkg.bin, { zula: "./dist/cjs/cli.js" });
-  assert.equal(pkg.private, true, "stays private until publication is approved");
   assert.equal(pkg.dependencies, undefined, "zero runtime dependencies");
   assert.equal(pkg.engines.node, ">=24.15.0");
 });
