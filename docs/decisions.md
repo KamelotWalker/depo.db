@@ -5,7 +5,7 @@ entry says what was chosen, what was rejected, and why.
 
 ## 1. Storage: one SQLite file, one table
 
-Data lives in a single table:
+Key-value data lives in a single table (0.2 adds separate feature tables; see §16–18):
 
 ```sql
 CREATE TABLE depo_entries (
@@ -301,4 +301,137 @@ confusion risk with the Zula game.
 
 Both renames happened before the first publication, as clean cutovers without
 old-name aliases or compatibility shims.
+
+## 16. Leaderboards: an indexed sorted set
+
+`depo_scores` is a `WITHOUT ROWID` table with primary key `(ns, board, member)`
+and a finite `REAL` score. Its covering index is
+`depo_scores_order (ns, board, score DESC, member COLLATE BINARY)`. Names and
+members are validated as non-empty, well-formed Unicode, and remain bound
+values, never SQL identifiers or JSON paths.
+
+- `top()` is an index range scan for one namespace/board, with SQL
+  `ORDER BY score DESC, member COLLATE BINARY LIMIT ? OFFSET ?`. No JavaScript
+  sorting or loading all members is involved.
+- Ties use BINARY member ordering, not locale ordering or tied ranks. `rank()`
+  looks up the target by primary key, then counts the two disjoint index
+  ranges before it: higher scores, and equal scores with a smaller member.
+  Rank is one-based and agrees with the positions returned by `top()`.
+  Counting a low-ranked member is still linear in the number before it, but
+  touches the covering index rather than scanning the table or sorting it.
+- `add()` is one `UPSERT ... RETURNING` statement on the existing busy-retry
+  path. Its update predicate refuses a non-finite sum; a missing returned row
+  becomes `DepoError`, without modifying the old score. There is no
+  read-then-write race across shards.
+- Boards share the parent's connection, namespaces and transactions.
+  `deleteAll()` deliberately remains a key-value operation: neither scores
+  nor rate limits are deleted. Use `Leaderboard#clear()` for one board.
+
+Rejected: fetching all JSON user entries and sorting in JavaScript. That parses
+and allocates every user value on every top-10 request, has no useful ranking
+index, and makes an atomic cross-process increment depend on rewriting JSON.
+
+## 17. Rate limits: GCRA, one row per key
+
+`depo_limits` is a `WITHOUT ROWID` table keyed by `(ns, key)`, storing one
+theoretical arrival time (TAT). It is represented as a whole-millisecond `tat`
+plus a window-scaled fractional `remainder`, with its `window` scale:
+`TAT = tat + remainder * window`. Keys are plain non-empty, well-formed strings:
+a dot is literal, not a path.
+
+For emission interval `I = window / limit`, the next arrival time is
+`max(TAT, now) + I`. A call is accepted only when the existing debt is at most
+`window - I`, allowing a burst of `limit` uses and then one use every `I`
+milliseconds. Denied calls never update the row. Computation uses debt as a
+fraction of a window, with one use costing `1 / limit`. Splitting TAT avoids
+adding a sub-millisecond interval directly to an epoch-sized REAL: that loses
+precision, can drift over a large burst, or even fail to advance at all. A
+small bounded floating-point tolerance handles arithmetic at the capacity
+boundary. Even a positive window smaller than one representable millisecond
+interval retains its burst capacity. Result durations round up to whole ms.
+`remaining` counts immediately available whole uses after the call,
+`retryAfter` is zero on acceptance, and `resetAfter` is the time until all
+capacity is restored. Keep the same options for a given key.
+
+- The read, computation and optional write run in one `BEGIN IMMEDIATE`
+  transaction through the existing busy-retry path; several shards cannot
+  consume the same capacity. Nested usage participates in outer transactions.
+- The wall clock is read after the write lock is acquired, through the same
+  `Date.now()` source as TTL. There are no timers; tests can replace this clock.
+- `resetRateLimit()` removes the key's state. `purgeExpired()` also deletes
+  fully refilled limit rows (`TAT <= now`) in every namespace and includes them
+  in its total. An index on the whole-millisecond `tat` serves the range check;
+  a residual comparison checks the fractional part without losing precision.
+  Both the existence check and deletion use this predicate.
+  Writable opens purge only when expired state exists; read-only opens never do.
+
+Rejected: fixed windows, which can admit two full bursts across a boundary;
+sliding logs, which need one timestamp per request and growing cleanup work.
+GCRA gives smooth refill with constant storage and a bounded amount of work per
+call, without a Redis server or runtime dependency.
+
+## 18. Additive schema compatibility in 0.2
+
+`SCHEMA_VERSION` stays **1**: the key-value and metadata formats have not
+changed. A writable connection adds missing feature tables/indexes through the
+existing create-when-missing immediate transaction, and rechecks the core
+version under that lock. A complete existing file is opened using reads only
+(unless expired state actually needs purging), preserving §7's late-opener
+behaviour. No compatibility-layer or migration CLI format changes are needed.
+
+Read-only connections never create tables. On a 0.1 file, leaderboard reads
+return an empty board instead of preparing SQL against absent tables. While a
+feature table is missing, reads recheck its existence through a prepared schema
+lookup; once discovered, the feature statements are prepared and cached, with
+no further discovery queries. Thus an already-open read-only dashboard sees a
+later writable upgrade and its committed data without reopening. A writable
+open adds the tables without altering existing entries. A 0.1 reader continues
+using the same core schema and simply ignores the additional tables. This is
+an additive capability, not a new incompatible on-disk version.
+
+## 19. Feature performance measurements (0.2.0)
+
+Measured with a throwaway script (not retained in the repository): one fresh
+file per durability mode, 100,000 members inserted in one transaction, then
+1,000 calls of each operation timed sequentially. `add()` increments member
+`000000`; `top(10)` fetches the highest ten members; `rank("050000")` counts
+roughly 50,000 preceding index entries. Read paths receive 20 warm-up calls.
+`rateLimit()` measures 1,000 accepted writes to one key (`limit: 1_000_000`,
+`window: 86_400_000`), not the cheaper denied path. Writes outside the initial
+population transaction commit individually. These are single-run elapsed
+times, not a cross-machine claim or a percentile latency benchmark.
+
+Machine: Windows_NT 10.0.26300 x64, Intel Core i5-10600K @ 4.10 GHz,
+63.83 GiB RAM, Node v24.22.0, SQLite 3.53.4.
+
+| Workload | Default `"full"` | `"normal"` |
+|---|---:|---:|
+| Populate 100,000 members, one transaction | 651.602 ms | 652.821 ms |
+| Leaderboard `add()`, 1,000 calls | 2,177.604 ms | 29.831 ms |
+| Leaderboard `top(10)`, 1,000 calls | 38.298 ms | 30.263 ms |
+| Leaderboard `rank()` at roughly #50,000, 1,000 calls | 3,322.970 ms | 3,359.810 ms |
+| Accepted `rateLimit()`, 1,000 calls | 2,158.730 ms | 42.579 ms |
+
+Per call: `add()` is about 2.18 ms / 29.8 µs, `top(10)` 38.3 / 30.3 µs,
+middle `rank()` 3.32 / 3.36 ms, and accepted `rateLimit()` 2.16 ms / 42.6 µs
+(default / normal). Rank's preceding-entry count is visible here: it is not
+an O(log n) order-statistics tree. Top-N remains a bounded index range scan.
+
+`EXPLAIN QUERY PLAN` on that 100,000-member file, using the implementation's
+queries, reports:
+
+```text
+top:
+SEARCH depo_scores USING COVERING INDEX depo_scores_order (ns=? AND board=?)
+
+rank:
+SEARCH target USING PRIMARY KEY (ns=? AND board=? AND member=?)
+CORRELATED SCALAR SUBQUERY 1
+SEARCH higher USING COVERING INDEX depo_scores_order (ns=? AND board=? AND score>?)
+CORRELATED SCALAR SUBQUERY 2
+SEARCH tied USING COVERING INDEX depo_scores_order (ns=? AND board=? AND score=? AND member<?)
+```
+
+Neither query sorts a temporary result or scans the score table. The rank
+subqueries read only their bounded covering-index ranges.
 

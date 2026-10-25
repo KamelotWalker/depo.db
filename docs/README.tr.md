@@ -14,6 +14,7 @@ mevcut kodunuzla doğrudan uyumlu giriş noktaları var; geçiş için tek satı
 - Senkron API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Saklanan nesnelere noktalı path ile erişim: `db.add("user.42.coins", 10)`
 - Kayıt başına TTL, namespace'ler, birden fazla anahtarı kapsayan transaction'lar
+- XP/ekonomi sıralamaları için indeksli liderlik tabloları ve kademeli yenilenen komut kullanım sınırları
 - Süreçler arasında atomik işlemler: birden fazla bot shard'ı aynı dosyayı paylaşabilir
 - wio.db, croxydb ve quick.db verilerini içe aktarmak için `depo migrate` CLI'ı
 
@@ -72,20 +73,24 @@ db.transaction(() => {                // ya hep ya hiç
 | `delete(key)` | `boolean` | Bir şey silinip silinmediği |
 | `all({ prefix?, limit? })` | `{ key, value }[]` | Anahtara göre sıralı |
 | `count()` | `number` | Bu namespace'teki süresi dolmamış kayıtlar |
-| `deleteAll()` | `number` | Bu namespace'ten silinen kayıtlar |
+| `deleteAll()` | `number` | Bu namespace'ten silinen kayıtlar; liderlik tablolarına ve kullanım sınırlarına dokunmaz |
 | `add(key, n)` / `subtract(key, n)` | `number` | Yoksa 0 kabul edilir |
 | `push(key, ...values)` | dizi | Yoksa `[]` kabul edilir |
 | `pull(key, valueOrPredicate)` | dizi | Derin eşitlik karşılaştırmasına göre eşit olan veya `predicate(el, index)` sonucu true olan tüm elemanları siler |
 | `ttl(key)` | ms \| `null` \| `undefined` | Kalan TTL; `null` = süresi hiç dolmaz; `undefined` = kayıt yok |
 | `expire(key, ms \| null)` | `boolean` | Mevcut bir kaydın TTL'ini ayarlar veya kaldırır |
-| `purgeExpired()` | `number` | Süresi dolmuş kayıtları diskten siler (tüm namespace'ler) |
+| `purgeExpired()` | `number` | Süresi dolmuş kayıtları ve kapasitesi tamamen yenilenmiş kullanım sınırı satırlarını siler (tüm namespace'ler); silinen toplam satır sayısı |
 | `table(name)` | `Depo` | Aynı bağlantıyı paylaşan başka bir namespace'in görünümü |
+| `leaderboard(name)` | `Leaderboard` | Bu namespace'e ait sıralı küme |
+| `rateLimit(key, { limit, window })` | `RateLimitResult` | Atomik olarak bir kullanım tüketir; `window` ms cinsindendir |
+| `resetRateLimit(key)` | `boolean` | Kullanım sınırı durumunun silinip silinmediği |
 | `transaction(fn)` | `fn`'in sonucu | Senkron `fn`, tüm yazmalar birlikte commit edilir |
 | `close()` | | Bağlantıyı (ve tüm `table()` görünümlerini) kapatır |
 
-Ayrıca dışa aktarılanlar: `DepoError` (geçersiz anahtarlarda, değerlerde ve tip
+Ayrıca dışa aktarılanlar: `Leaderboard`, `DepoError` (geçersiz anahtarlarda, değerlerde ve tip
 uyuşmazlıklarında fırlatılır), `escapeKey(segment)`, `VERSION` ve TypeScript tipleri
-`Key`, `Entry`, `DepoOptions`, `SetOptions`, `AllOptions`.
+`Key`, `Entry`, `DepoOptions`, `SetOptions`, `AllOptions`, `LeaderboardEntry`,
+`RateLimitOptions`, `RateLimitResult`.
 
 Tip belirtilen okumalar: `db.get<number>("coins")`, `number | undefined` döndürür;
 `db.get("coins", 0)`, `number` döndürür.
@@ -143,6 +148,69 @@ Süresi dolan kayıtlar tüm okumalardan anında kaybolur. Satırları, dosya a�
 ve `purgeExpired()` ile silinir; arka planda çalışan zamanlayıcılar yoktur.
 Bir kaydın tamamını `ttl` olmadan yazmak TTL'ini kaldırır; path'e yazma işlemleri,
 `add`, `push` ve `pull` ise TTL'i korur.
+
+## Liderlik tabloları
+
+Her kullanıcının JSON verisini okuyup sıralamak yerine XP sıralamasını bir sıralı kümede tutun:
+
+```js
+const xp = db.table(`guild:${message.guildId}`).leaderboard("xp");
+xp.add(message.author.id, 15); // birden fazla shard XP verse de atomiktir
+const top10 = xp.top(10);
+await message.reply(
+  top10.map(({ member, score, rank }) => `${rank}. <@${member}> — ${score} XP`).join("\n") +
+  `\nSen ${xp.rank(message.author.id)}. sıradasın!`
+);
+```
+
+| `Leaderboard` metodu | Dönüş değeri | |
+|---|---|---|
+| `set(member, score)` | `number` | Puanı kaydeder ve döndürür |
+| `add(member, delta)` | `number` | Atomik artış; üye yoksa 0'dan başlar |
+| `score(member)` | `number \| undefined` | Üye yoksa → `undefined` |
+| `rank(member)` | `number \| undefined` | 1'den başlayan sıra; en yüksek puan 1. sıradadır |
+| `top(limit = 10, offset = 0)` | `LeaderboardEntry[]` | `{ member, score, rank }`, en yüksek puan önce; sıralar `offset` değerini de içerir |
+| `remove(member)` | `boolean` | Üyenin silinip silinmediği |
+| `count()` | `number` | Bu tablodaki üye sayısı |
+| `clear()` | `number` | Bu tablodan silinen üye sayısı |
+
+Puanlar eşitse üyeler artan sırada dizilir (SQLite BINARY); böylece `rank()` ve
+`top()` her zaman aynı sıralamayı verir. Adlar ve üyeler boş olmayan, geçerli
+Unicode string'lerdir; noktalı path olarak yorumlanmaz. Puanlar ve artışlar sonlu
+sayı olmalıdır; taşma durumunda `DepoError` fırlatılır ve hiçbir şey yazılmaz.
+`limit` ve `offset` negatif olmayan tam sayılar olmalıdır. Tablolar namespace'e
+aittir, `db.transaction()` işlemlerine katılır ve üst bağlantıyla birlikte kapanır.
+`db.deleteAll()` yalnızca key-value kayıtlarını siler; liderlik tablolarına ve kullanım sınırlarına dokunmaz.
+
+## Kullanım sınırları
+
+Başlangıçta **10 saniyede 3 kullanıma** izin verin; ardından her 10/3 saniyede
+bir kullanım hakkı yenilensin. GCRA, anahtar başına tek bir varış zamanı saklar;
+reddedilen çağrılar kapasite tüketmez.
+
+```js
+const result = db.rateLimit(`daily:${message.author.id}`, { limit: 3, window: 10_000 });
+if (!result.allowed) {
+  await message.reply(`Biraz yavaşla! ${result.retryAfter} ms sonra tekrar deneyebilirsin.`);
+} else {
+  await message.reply(`Komut kabul edildi. ${result.remaining} kullanım hakkın kaldı.`);
+}
+```
+
+`RateLimitResult`, `{ allowed, remaining, retryAfter, resetAfter }` biçimindedir:
+`remaining`, çağrıdan sonra hemen kullanılabilecek tam hak sayısıdır; çağrı kabul
+edildiyse `retryAfter` 0'dır; `resetAfter`, kapasitenin tamamen yenilenmesine kalan
+süredir. Süreler milisaniye cinsindedir ve yukarı yuvarlanır. `limit` pozitif bir
+tam sayı, `window` pozitif ve sonlu bir sayı olmalıdır. Anahtarlar boş olmayan,
+geçerli Unicode string'lerdir (noktalar gerçek karakterdir).
+Bir anahtar için her çağrıda aynı seçenekleri kullanın.
+
+Çağrılar süreçler arasında atomiktir ve `db.transaction()` işlemlerine katılır.
+`db.table()`, kullanım sınırı anahtarlarını birbirinden ayırır;
+`db.resetRateLimit(key)` anahtarın kapasitesini sıfırlar ve tüm hakları geri verir.
+TTL'de olduğu gibi saat kaynağı `Date.now()`'dur. `purgeExpired()`, kapasitesi
+tamamen yenilenmiş kullanım sınırı satırlarını da (teorik varış zamanı ≤ şimdi) siler ve sayıya ekler.
+Yazılabilir açılışlarda aynı temizlik yapılır; arka planda zamanlayıcı çalışmaz.
 
 ## Dayanıklılık ve eşzamanlılık
 

@@ -19,7 +19,7 @@ test("every entry point loads through the exports map in ESM and CJS", async () 
   const esm = await import("depo.db");
   const cjs = require("depo.db");
   for (const mod of [esm, cjs]) {
-    assert.deepEqual(Object.keys(mod).sort(), ["DEFAULT_NAMESPACE", "DEFAULT_PATH", "Depo", "DepoError", "VERSION", "escapeKey"]);
+    assert.deepEqual(Object.keys(mod).sort(), ["DEFAULT_NAMESPACE", "DEFAULT_PATH", "Depo", "DepoError", "Leaderboard", "VERSION", "escapeKey"]);
     assert.equal(mod.DEFAULT_PATH, "depo.sqlite");
     assert.equal(new mod.DepoError("invalid").name, "DepoError");
     assert.equal(typeof mod.Depo, "function");

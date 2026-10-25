@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { DepoError } from "./errors.js";
+import { Leaderboard } from "./leaderboard.js";
 import { deleteIn, formatKey, getIn, parseKey, setIn, typeName, type Key } from "./path.js";
 import type { ConnectionOptions } from "./sqlite.js";
 import { assertWellFormed, Store } from "./store.js";
@@ -24,6 +25,22 @@ export interface AllOptions {
 export interface Entry<T = unknown> {
   key: string;
   value: T;
+}
+
+export interface RateLimitOptions {
+  /** Maximum burst and number of uses refilled per window. Positive integer. */
+  limit: number;
+  /** Refill window in milliseconds. Positive finite number. */
+  window: number;
+}
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  /** Milliseconds until another use is allowed; zero when allowed. */
+  retryAfter: number;
+  /** Milliseconds until all capacity is restored. */
+  resetAfter: number;
 }
 
 export const DEFAULT_PATH = "depo.sqlite";
@@ -77,6 +94,29 @@ export class Depo {
     } finally {
       sharedStore = undefined;
     }
+  }
+
+  /** Returns a sorted set scoped to this namespace, sharing its connection. */
+  leaderboard(name: string): Leaderboard {
+    return new Leaderboard(this.#store, this.namespace, name);
+  }
+
+  /** Atomically consumes one use with smooth GCRA refill. Keys are plain strings, not dot paths. */
+  rateLimit(key: string, options: RateLimitOptions): RateLimitResult {
+    assertRateLimitKey(key);
+    const limit = options?.limit;
+    const window = options?.window;
+    if (!Number.isInteger(limit) || limit <= 0) throw new DepoError("limit must be a positive integer");
+    if (typeof window !== "number" || !Number.isFinite(window) || window <= 0) {
+      throw new DepoError("window must be a positive finite number of milliseconds");
+    }
+    return this.#store.rateLimit(this.namespace, key, limit, window);
+  }
+
+  /** Removes a rate-limit key's state, restoring its full capacity. */
+  resetRateLimit(key: string): boolean {
+    assertRateLimitKey(key);
+    return this.#store.resetRateLimit(this.namespace, key);
   }
 
   /** Reads a value. Returns `defaultValue` (or `undefined`) when the key or path does not exist or has expired. */
@@ -145,7 +185,7 @@ export class Depo {
     return this.#store.count(this.namespace, Date.now());
   }
 
-  /** Removes every entry of this namespace. Returns how many live entries were removed. */
+  /** Removes this namespace's entries, not leaderboards or rate limits. Returns live entries removed. */
   deleteAll(): number {
     return this.#store.transaction(() => {
       const removed = this.#store.count(this.namespace, Date.now());
@@ -236,9 +276,9 @@ export class Depo {
   }
 
   /**
-   * Deletes expired entries in every namespace and returns how many were
-   * removed. Expired entries are already invisible to reads; this reclaims
-   * their space. Also runs automatically when a file is opened.
+   * Deletes expired entries and fully refilled rate-limit rows in every namespace,
+   * returning the total removed. Expired entries are already invisible to reads;
+   * this reclaims their space. Also runs automatically on writable file opens.
    */
   purgeExpired(): number {
     return this.#store.purgeExpired(Date.now());
@@ -299,6 +339,11 @@ function assertNamespace(namespace: string): void {
     throw new DepoError("namespace must be a non-empty string");
   }
   assertWellFormed("Namespace", namespace);
+}
+
+function assertRateLimitKey(key: string): void {
+  if (typeof key !== "string" || key.length === 0) throw new DepoError("Rate-limit key must be a non-empty string");
+  assertWellFormed("Rate-limit key", key);
 }
 
 /**

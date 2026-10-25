@@ -14,6 +14,7 @@ over is a one-line change.
 - Synchronous API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Dot paths into stored objects: `db.add("user.42.coins", 10)`
 - TTL per entry, namespaces, multi-key transactions
+- Indexed leaderboards for XP/economy rankings and smooth-refill command rate limits
 - Atomic across processes: several bot shards can share one file
 - `depo migrate` CLI to import wio.db, croxydb and quick.db data
 
@@ -72,20 +73,24 @@ db.transaction(() => {                // all or nothing
 | `delete(key)` | `boolean` | Whether something was removed |
 | `all({ prefix?, limit? })` | `{ key, value }[]` | Ordered by key |
 | `count()` | `number` | Live entries in this namespace |
-| `deleteAll()` | `number` | Entries removed from this namespace |
+| `deleteAll()` | `number` | Entries removed from this namespace; leaves leaderboards and rate limits alone |
 | `add(key, n)` / `subtract(key, n)` | `number` | Missing counts as 0 |
 | `push(key, ...values)` | array | Missing counts as `[]` |
 | `pull(key, valueOrPredicate)` | array | Removes every deep-equal element, or where `predicate(el, index)` is true |
 | `ttl(key)` | ms \| `null` \| `undefined` | Remaining TTL; `null` = never expires; `undefined` = missing |
 | `expire(key, ms \| null)` | `boolean` | Set or clear the TTL of an existing entry |
-| `purgeExpired()` | `number` | Delete expired entries from disk (all namespaces) |
+| `purgeExpired()` | `number` | Delete expired entries and fully refilled rate-limit rows (all namespaces); total rows removed |
 | `table(name)` | `Depo` | View of another namespace sharing the connection |
+| `leaderboard(name)` | `Leaderboard` | Sorted set scoped to this namespace |
+| `rateLimit(key, { limit, window })` | `RateLimitResult` | Atomically consume one use; `window` in ms |
+| `resetRateLimit(key)` | `boolean` | Whether rate-limit state was removed |
 | `transaction(fn)` | `fn`'s result | Synchronous `fn`, all writes commit together |
 | `close()` | | Closes the connection (and all `table()` views) |
 
-Also exported: `DepoError` (thrown for invalid keys, values and type
+Also exported: `Leaderboard`, `DepoError` (thrown for invalid keys, values and type
 mismatches), `escapeKey(segment)`, `VERSION`, and the TypeScript types `Key`,
-`Entry`, `DepoOptions`, `SetOptions`, `AllOptions`.
+`Entry`, `DepoOptions`, `SetOptions`, `AllOptions`, `LeaderboardEntry`,
+`RateLimitOptions`, `RateLimitResult`.
 
 Typed reads: `db.get<number>("coins")` returns `number | undefined`;
 `db.get("coins", 0)` returns `number`.
@@ -142,6 +147,65 @@ Expired entries disappear from every read at once. Their rows are deleted when
 a file is opened and by `purgeExpired()`; there are no background timers.
 Setting a whole entry without `ttl` clears its TTL; path writes, `add`, `push`
 and `pull` keep it.
+
+## Leaderboards
+
+Keep XP rankings in a sorted set instead of loading and sorting every user's JSON:
+
+```js
+const xp = db.table(`guild:${message.guildId}`).leaderboard("xp");
+xp.add(message.author.id, 15); // atomic, even when several shards award XP
+const top10 = xp.top(10);
+await message.reply(
+  top10.map(({ member, score, rank }) => `${rank}. <@${member}> — ${score} XP`).join("\n") +
+  `\nYou are #${xp.rank(message.author.id)}!`
+);
+```
+
+| `Leaderboard` method | Returns | |
+|---|---|---|
+| `set(member, score)` | `number` | Store and return the score |
+| `add(member, delta)` | `number` | Atomic increment; missing starts at 0 |
+| `score(member)` | `number \| undefined` | Missing member → `undefined` |
+| `rank(member)` | `number \| undefined` | One-based position; highest score is #1 |
+| `top(limit = 10, offset = 0)` | `LeaderboardEntry[]` | `{ member, score, rank }`, highest first; ranks include the offset |
+| `remove(member)` | `boolean` | Whether a member was removed |
+| `count()` | `number` | Members on this board |
+| `clear()` | `number` | Members removed from this board |
+
+Ties use ascending member order (SQLite BINARY), so `rank()` and `top()` always
+agree. Names and members are non-empty, well-formed strings, not dot paths.
+Scores/deltas must be finite numbers; overflow throws `DepoError` without writing.
+Limits/offsets must be non-negative integers. Boards belong to their namespace,
+participate in `db.transaction()`, and close with their parent connection.
+`db.deleteAll()` only deletes key-value entries, not leaderboards or rate limits.
+
+## Rate limits
+
+Allow a burst of **3 uses per 10 seconds**, then refill smoothly at one use every
+10/3 seconds. GCRA stores one arrival time per key; denied calls consume nothing.
+
+```js
+const result = db.rateLimit(`daily:${message.author.id}`, { limit: 3, window: 10_000 });
+if (!result.allowed) {
+  await message.reply(`Slow down! Try again in ${result.retryAfter} ms.`);
+} else {
+  await message.reply(`Command accepted. ${result.remaining} uses left.`);
+}
+```
+
+`RateLimitResult` is `{ allowed, remaining, retryAfter, resetAfter }`: `remaining`
+is the immediately available whole uses after this call, `retryAfter` is 0 when
+allowed, and `resetAfter` is the time until full capacity is restored. Durations
+are milliseconds, rounded up. `limit` must be a positive integer and `window` a
+positive finite number. Keys are non-empty, well-formed strings (dots are literal).
+Use the same options for a key on every call.
+
+Calls are atomic across processes and participate in `db.transaction()`.
+`db.table()` isolates rate-limit keys; `db.resetRateLimit(key)` restores a key's
+capacity. The clock is `Date.now()`, just like TTLs. `purgeExpired()` also removes
+fully refilled rate-limit rows (theoretical arrival time ≤ now) and includes them in its count.
+Writable opens perform the same purge; no background timers are used.
 
 ## Durability and concurrency
 

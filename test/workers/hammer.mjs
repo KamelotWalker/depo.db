@@ -33,6 +33,19 @@ if (mode === "native") {
     await pause();
   }
   db.close();
+} else if (mode === "features") {
+  const db = new Depo(file, { busyTimeout: BUSY_TIMEOUT });
+  const board = db.table("guild").leaderboard("xp");
+  // Freeze the shared clock so refill cannot add capacity during the contention test.
+  Date.now = () => startAt;
+  let allowed = 0;
+  for (let i = 0; i < iterations; i++) {
+    board.add("shared-user", 1);
+    if (db.rateLimit("command", { limit: 100, window: 60_000 }).allowed) allowed++;
+    await pause();
+  }
+  db.set(["accepted", workerId], allowed);
+  db.close();
 } else if (mode === "naive") {
   // Deliberately unsafe read-then-write without a transaction (control group).
   const db = new Depo(file, { busyTimeout: BUSY_TIMEOUT });

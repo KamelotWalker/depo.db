@@ -58,6 +58,16 @@ test("native API: add, push, path add and transactions are atomic across process
   db.close();
 });
 
+test("leaderboard increments and GCRA capacity are atomic across processes", async (t) => {
+  const file = join(tempDir(t), "features.sqlite");
+  new Depo(file).close();
+  await hammer("features", file);
+  const db = new Depo(file);
+  onCleanup(t, () => db.close());
+  assert.equal(db.table("guild").leaderboard("xp").score("shared-user"), WORKERS * ITERATIONS);
+  assert.equal(Object.values(db.get("accepted")).reduce((sum, value) => sum + value, 0), 100);
+});
+
 test("control: unsynchronised get-then-set from several processes is not atomic", async (t) => {
   const file = join(tempDir(t), "naive.sqlite");
   await hammer("naive", file);

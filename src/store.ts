@@ -1,5 +1,7 @@
 import { DepoError } from "./errors.js";
 import { Connection, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "./sqlite.js";
+import type { LeaderboardEntry } from "./leaderboard.js";
+import type { RateLimitResult } from "./depo.js";
 
 export const SCHEMA_VERSION = 1;
 
@@ -19,8 +21,8 @@ export interface RawEntry {
  * One SQLite connection plus the prepared statements for Depo's schema.
  * Shared by every namespace view (`Depo#table`) opened from the same `Depo`.
  *
- * Schema: a single `depo_entries` table keyed by `(ns, key)`. Namespaces are a
- * column, not separate SQL tables, so no identifier is ever built from user input.
+ * Namespaces are columns, not separate SQL tables, so no identifier is ever built
+ * from user input. Sorted scores and rate-limit state have their own tables.
  */
 export class Store {
   readonly path: string;
@@ -39,7 +41,10 @@ export class Store {
   readonly #setExpiry: SqliteStatement;
   readonly #selectMeta: SqliteStatement;
   readonly #upsertMeta: SqliteStatement;
+  readonly #selectFeatureTable: SqliteStatement;
 
+  #scores: ScoreStatements | undefined;
+  #limits: LimitStatements | undefined;
   constructor(path: string, options: ConnectionOptions) {
     this.path = path;
     this.#conn = new Connection(path, options);
@@ -48,8 +53,10 @@ export class Store {
       // Opening an existing file takes no write lock: under heavy write traffic from other
       // processes a late opener would otherwise have to win the lock just to start.
       const version = this.#conn.run(() => readSchemaVersion(db));
-      if (version === undefined) this.#conn.transaction(() => this.#migrate());
-      else checkVersion(path, version);
+      if (version !== undefined) checkVersion(path, version);
+      if (!(options.readOnly ?? false) && (version === undefined || !this.#conn.run(() => hasFeatureSchema(db)))) {
+        this.#conn.transaction(() => this.#migrate());
+      }
       this.#selectRow = db.prepare("SELECT value, expires_at FROM depo_entries WHERE ns = ? AND key = ?");
       this.#upsert = db.prepare(
         "INSERT INTO depo_entries (ns, key, value, expires_at) VALUES (?, ?, ?, ?) " +
@@ -78,6 +85,10 @@ export class Store {
       this.#upsertMeta = db.prepare(
         "INSERT INTO depo_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       );
+      this.#selectFeatureTable = db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?");
+      const tables = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all().map((row) => row["name"]));
+      this.#scores = tables.has("depo_scores") ? prepareScores(db) : undefined;
+      this.#limits = tables.has("depo_limits") ? prepareLimits(db) : undefined;
       if (!(options.readOnly ?? false)) this.purgeExpired(Date.now());
     } catch (error) {
       this.#conn.close();
@@ -128,6 +139,23 @@ export class Store {
         PRIMARY KEY (ns, key)
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS depo_entries_expires_at ON depo_entries (expires_at) WHERE expires_at IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS depo_scores (
+        ns TEXT NOT NULL,
+        board TEXT NOT NULL,
+        member TEXT NOT NULL,
+        score REAL NOT NULL,
+        PRIMARY KEY (ns, board, member)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS depo_scores_order ON depo_scores (ns, board, score DESC, member COLLATE BINARY);
+      CREATE TABLE IF NOT EXISTS depo_limits (
+        ns TEXT NOT NULL,
+        key TEXT NOT NULL,
+        tat REAL NOT NULL,
+        remainder REAL NOT NULL,
+        window REAL NOT NULL,
+        PRIMARY KEY (ns, key)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS depo_limits_tat ON depo_limits (tat);
     `);
     const version = readSchemaVersion(this.#conn.db);
     if (version === undefined) {
@@ -216,18 +244,142 @@ export class Store {
     this.#run(() => this.#deleteNamespace.run(ns));
   }
 
-  /** Deletes expired rows in every namespace. Takes no write lock when nothing has expired. */
+  /** Deletes expired entries and fully refilled limits; takes no write lock when neither exists. */
   purgeExpired(now: number): number {
-    return this.#run(() => (this.#anyExpired.get(now) === undefined ? 0 : Number(this.#purge.run(now).changes)));
+    const entries = this.#run(() => this.#anyExpired.get(now) !== undefined);
+    const limits = this.#run(() => this.#limitStatements?.anyExpired.get(now, now) !== undefined);
+    if (!entries && !limits) return 0;
+    return this.transaction(() =>
+      (entries ? Number(this.#purge.run(now).changes) : 0) +
+      (limits ? Number(this.#limits!.purge.run(now, now).changes) : 0),
+    );
   }
 
   setExpiry(ns: string, key: string, expiresAt: number | null, now: number): boolean {
     assertNames(ns, key);
     return Number(this.#run(() => this.#setExpiry.run(expiresAt, ns, key, now)).changes) > 0;
   }
+
+  setScore(ns: string, board: string, member: string, score: number, add: boolean): number {
+    return this.#run(() => {
+      const statements = this.#scoreStatements;
+      if (statements === undefined) throw new DepoError("Cannot write leaderboards on a read-only database");
+      const row = (add ? statements.add : statements.set).get(ns, board, member, score);
+      if (row === undefined) throw new DepoError(`Result for member ${JSON.stringify(member)} is not a finite number`);
+      return Number(row["score"]);
+    });
+  }
+
+  score(ns: string, board: string, member: string): number | undefined {
+    return this.#run(() => {
+      const row = this.#scoreStatements?.score.get(ns, board, member);
+      return row === undefined ? undefined : Number(row["score"]);
+    });
+  }
+
+  rank(ns: string, board: string, member: string): number | undefined {
+    return this.#run(() => {
+      const row = this.#scoreStatements?.rank.get(ns, board, member);
+      return row === undefined ? undefined : Number(row["rank"]);
+    });
+  }
+
+  top(ns: string, board: string, limit: number, offset: number): LeaderboardEntry[] {
+    return this.#run(() =>
+      (this.#scoreStatements?.top.all(ns, board, Math.min(limit, Number.MAX_SAFE_INTEGER), Math.min(offset, Number.MAX_SAFE_INTEGER)) ?? []).map((row, index) => ({
+        member: String(row["member"]),
+        score: Number(row["score"]),
+        rank: offset + index + 1,
+      })),
+    );
+  }
+
+  removeScore(ns: string, board: string, member: string): boolean {
+    return this.#run(() => Number(this.#scoreStatements?.remove.run(ns, board, member).changes ?? 0) > 0);
+  }
+
+  countScores(ns: string, board: string): number {
+    return this.#run(() => Number(this.#scoreStatements?.count.get(ns, board)?.["n"] ?? 0));
+  }
+
+  clearScores(ns: string, board: string): number {
+    return this.#run(() => Number(this.#scoreStatements?.clear.run(ns, board).changes ?? 0));
+  }
+
+  rateLimit(ns: string, key: string, limit: number, window: number): RateLimitResult {
+    return this.transaction(() => {
+      const statements = this.#limitStatements;
+      if (statements === undefined) throw new DepoError("Cannot write rate limits on a read-only database");
+      // Read the wall clock after acquiring the lock, just like TTL read-modify-writes.
+      const now = Date.now();
+      const row = statements.select.get(ns, key);
+      // Split the virtual timestamp into whole milliseconds and a window-scaled
+      // remainder: adding tiny intervals directly to epoch milliseconds loses capacity.
+      let debt = 0;
+      let reset = 0;
+      if (row !== undefined) {
+        const tat = Number(row["tat"]);
+        const remainder = Number(row["remainder"]);
+        const previousWindow = Number(row["window"]);
+        const elapsed = now - tat;
+        if (elapsed >= 0) {
+          const outstanding = Math.max(0, remainder - elapsed / previousWindow);
+          debt = outstanding === 0 ? 0 : outstanding * (previousWindow / window);
+          reset = outstanding * previousWindow;
+        } else {
+          debt = -elapsed / window + (remainder === 0 ? 0 : remainder * (previousWindow / window));
+          reset = -elapsed + remainder * previousWindow;
+        }
+      }
+      const cost = 1 / limit;
+      const tolerance = Math.min(cost / 2, Number.EPSILON * limit * 2);
+      // Snap arithmetic noise, but preserve genuine fractional-window durations.
+      const fraction = window % 1;
+      const fractionalPrecision = fraction === 0 ? Infinity : Math.min(fraction, 1 - fraction) / (limit * 4);
+      const roundingError = Math.min(fractionalPrecision, 0.25 / limit, Number.EPSILON * Math.max(window, reset, 1) * limit * 8);
+      if (debt - (1 - cost) > tolerance) {
+        return {
+          allowed: false,
+          remaining: 0,
+          retryAfter: ceilDuration(reset - window * (1 - cost), roundingError),
+          resetAfter: ceilDuration(reset, roundingError),
+        };
+      }
+      const next = Math.min(1, debt + cost);
+      const duration = next * window;
+      const whole = Math.floor(duration);
+      statements.upsert.run(ns, key, now + whole, Math.max(0, next - whole / window), window);
+      const remaining = Math.max(0, Math.min(limit - 1, Math.floor((1 - next + tolerance) * limit)));
+      return { allowed: true, remaining, retryAfter: 0, resetAfter: ceilDuration(duration, roundingError) };
+    });
+  }
+
+  resetRateLimit(ns: string, key: string): boolean {
+    return this.#run(() => Number(this.#limitStatements?.remove.run(ns, key).changes ?? 0) > 0);
+  }
+
+  get #scoreStatements(): ScoreStatements | undefined {
+    if (this.#scores === undefined && this.#selectFeatureTable.get("depo_scores") !== undefined) {
+      this.#scores = prepareScores(this.#conn.db);
+    }
+    return this.#scores;
+  }
+
+  get #limitStatements(): LimitStatements | undefined {
+    if (this.#limits === undefined && this.#selectFeatureTable.get("depo_limits") !== undefined) {
+      this.#limits = prepareLimits(this.#conn.db);
+    }
+    return this.#limits;
+  }
 }
 
-/** Schema version when all of Depo's tables exist, else `undefined`. */
+/** Ceil milliseconds without turning floating-point noise above an integer into an extra millisecond. */
+function ceilDuration(duration: number, roundingError: number): number {
+  const integer = Math.round(duration);
+  return Math.max(1, Math.abs(duration - integer) <= roundingError ? integer : Math.ceil(duration));
+}
+
+/** Core schema version, independent of additive feature tables. */
 function readSchemaVersion(db: SqliteDatabase): number | undefined {
   const objects = db
     .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_meta', 'depo_entries', 'depo_entries_expires_at')")
@@ -235,6 +387,75 @@ function readSchemaVersion(db: SqliteDatabase): number | undefined {
   if (Number(objects?.["n"]) !== 3) return undefined;
   const row = db.prepare("SELECT value FROM depo_meta WHERE key = 'schema_version'").get();
   return row === undefined ? undefined : Number(row["value"]);
+}
+
+
+function hasFeatureSchema(db: SqliteDatabase): boolean {
+  const row = db.prepare(
+    "SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('depo_scores', 'depo_scores_order', 'depo_limits', 'depo_limits_tat')",
+  ).get();
+  return Number(row?.["n"]) === 4;
+}
+
+interface ScoreStatements {
+  set: SqliteStatement;
+  add: SqliteStatement;
+  score: SqliteStatement;
+  rank: SqliteStatement;
+  top: SqliteStatement;
+  remove: SqliteStatement;
+  count: SqliteStatement;
+  clear: SqliteStatement;
+}
+
+function prepareScores(db: SqliteDatabase): ScoreStatements {
+  return {
+    set: db.prepare(
+      "INSERT INTO depo_scores (ns, board, member, score) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT (ns, board, member) DO UPDATE SET score = excluded.score RETURNING score",
+    ),
+    add: db.prepare(
+      "INSERT INTO depo_scores (ns, board, member, score) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT (ns, board, member) DO UPDATE SET score = depo_scores.score + excluded.score " +
+      "WHERE depo_scores.score + excluded.score BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308 RETURNING score",
+    ),
+    score: db.prepare("SELECT score FROM depo_scores WHERE ns = ? AND board = ? AND member = ?"),
+    rank: db.prepare(
+      "SELECT 1 + (SELECT count(*) FROM depo_scores AS higher " +
+      "WHERE higher.ns = target.ns AND higher.board = target.board AND higher.score > target.score) " +
+      "+ (SELECT count(*) FROM depo_scores AS tied WHERE tied.ns = target.ns AND tied.board = target.board " +
+      "AND tied.score = target.score AND tied.member < target.member COLLATE BINARY) AS rank " +
+      "FROM depo_scores AS target WHERE ns = ? AND board = ? AND member = ?",
+    ),
+    top: db.prepare(
+      "SELECT member, score FROM depo_scores WHERE ns = ? AND board = ? " +
+      "ORDER BY score DESC, member COLLATE BINARY LIMIT ? OFFSET ?",
+    ),
+    remove: db.prepare("DELETE FROM depo_scores WHERE ns = ? AND board = ? AND member = ?"),
+    count: db.prepare("SELECT count(*) AS n FROM depo_scores WHERE ns = ? AND board = ?"),
+    clear: db.prepare("DELETE FROM depo_scores WHERE ns = ? AND board = ?"),
+  };
+}
+
+interface LimitStatements {
+  select: SqliteStatement;
+  upsert: SqliteStatement;
+  remove: SqliteStatement;
+  anyExpired: SqliteStatement;
+  purge: SqliteStatement;
+}
+
+function prepareLimits(db: SqliteDatabase): LimitStatements {
+  return {
+    select: db.prepare("SELECT tat, remainder, window FROM depo_limits WHERE ns = ? AND key = ?"),
+    upsert: db.prepare(
+      "INSERT INTO depo_limits (ns, key, tat, remainder, window) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT (ns, key) DO UPDATE SET tat = excluded.tat, remainder = excluded.remainder, window = excluded.window",
+    ),
+    remove: db.prepare("DELETE FROM depo_limits WHERE ns = ? AND key = ?"),
+    anyExpired: db.prepare("SELECT 1 FROM depo_limits WHERE tat <= ? AND remainder <= (? - tat) / window LIMIT 1"),
+    purge: db.prepare("DELETE FROM depo_limits WHERE tat <= ? AND remainder <= (? - tat) / window"),
+  };
 }
 
 function checkVersion(path: string, version: number): void {
