@@ -278,6 +278,16 @@ supported.
   Check `error.name === "DepoError"` when mixing both.
 - The native API does not create parent directories (SQLite's behaviour); the
   wio.db layer does, because wio.db did.
+- Releases: `npm version <x.y.z> --no-git-tag-version`, set the same version in
+  `src/version.ts` (`test/package.test.mjs` checks they match), commit, then push
+  a `v<x.y.z>` tag. `.github/workflows/release.yml` checks that the tag matches
+  `package.json`, runs typecheck, tests, smoke and attw, and publishes through
+  npm trusted publishing (OIDC, with provenance). There is no npm token and no
+  local `npm publish`.
+- Only one `README*` file lives in the repository root. npm picks the package
+  page README from an unordered `{README,README.*}` glob of the root, so 0.1.1
+  shipped the Turkish README as its npm page. The Turkish translation lives in
+  `docs/README.tr.md`.
 
 ## 15. Package name: depo.db (2026-10-25)
 

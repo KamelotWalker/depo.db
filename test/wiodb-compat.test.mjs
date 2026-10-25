@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Depo } from "../dist/esm/index.js";
+import { Depo, VERSION } from "../dist/esm/index.js";
 import { DatabaseError, JsonDatabase } from "../dist/esm/compat/wiodb.js";
 import { FIXTURES, onCleanup, tempDir } from "./helpers.mjs";
 
@@ -222,7 +222,7 @@ test("intentional differences: key order, size, maxDataSize, destroy, errors", (
   assert.deepEqual(db.keyArray(), ["a", "b"], "ordered by key");
   assert.deepEqual(db.all(1), [{ ID: "a", data: 1 }]);
   assert.equal(db.size, 2);
-  assert.deepEqual(db.info, { size: 2, version: "0.1.2" });
+  assert.deepEqual(db.info, { size: 2, version: VERSION });
   db.set("a", 2);
   db.set("a.nested", 3);
   assert.throws(() => db.set("c", 1), (error) => error instanceof DatabaseError && error.message === "Data limit exceeded!");
