@@ -10,7 +10,7 @@ test("package.json invariants", async () => {
   const { VERSION } = await import("zula");
   assert.equal(VERSION, pkg.version);
   assert.equal(pkg.name, "zula");
-  assert.deepEqual(pkg.bin, { zula: "./dist/cjs/cli.js" });
+  assert.deepEqual(pkg.bin, { zula: "dist/cjs/cli.js" });
   assert.equal(pkg.dependencies, undefined, "zero runtime dependencies");
   assert.equal(pkg.engines.node, ">=24.15.0");
 });

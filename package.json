@@ -67,7 +67,7 @@
     }
   },
   "bin": {
-    "zula": "./dist/cjs/cli.js"
+    "zula": "dist/cjs/cli.js"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
