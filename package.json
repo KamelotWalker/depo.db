@@ -1,6 +1,6 @@
 {
   "name": "depo.db",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zero-dependency key-value database for Node.js on the built-in node:sqlite. Drop-in replacement for wio.db and quick.db without native modules.",
   "license": "MIT",
   "repository": {

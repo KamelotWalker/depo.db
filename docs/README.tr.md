@@ -25,7 +25,7 @@ npm install depo.db
 
 **Node.js 24.15.0 veya üzeri** gerekir: `node:sqlite` için bayrak gerektirmeyen ve
 artık `ExperimentalWarning` yazdırmayan ilk sürüm serisi budur
-([ayrıntılar](docs/decisions.md#13-minimum-nodejs-version-24150)).
+([ayrıntılar](decisions.md#13-minimum-nodejs-version-24150)).
 
 ## Hızlı başlangıç
 
@@ -116,7 +116,7 @@ db.get(`${escapeKey("site.com")}.visits`);
   gibi tek başına bir UTF-16 surrogate içeren değerler `DepoError` fırlatır: SQLite
   metni UTF-8 olarak sakladığından bu karakter U+FFFD'ye dönüşüp başka anahtarlarla çakışırdı.
 
-Gerekçe: [kararlar §3–4](docs/decisions.md#3-keys-dots-are-paths-backslash-escapes).
+Gerekçe: [kararlar §3–4](decisions.md#3-keys-dots-are-paths-backslash-escapes).
 
 ## Değerler
 
@@ -162,7 +162,7 @@ Bir kaydın tamamını `ttl` olmadan yazmak TTL'ini kaldırır; path'e yazma iş
 - Başka bir sürecin kilidini beklerken `busyTimeout` ms (varsayılan 5000) sonra
   `database is locked` hatasıyla vazgeçilir. Çok sayıda süreç durmadan yazıyorsa
   bir süreç saniyelerce bekleyebilir; bu tür kurulumlarda `busyTimeout` değerini artırın
-  ([ayrıntılar](docs/decisions.md#7-concurrency-wal-immediate-transactions-busy-polling)).
+  ([ayrıntılar](decisions.md#7-concurrency-wal-immediate-transactions-busy-polling)).
 - Tüm süreçler aynı makinede olmalıdır (ağ sürücüleri kullanılamaz).
 
 ## wio.db'den geçiş
@@ -176,7 +176,7 @@ Kodunuz çalışmaya devam eder. İlk başlatmada mevcut `databases/db.json`, bi
 kereliğine `databases/db.sqlite` içine aktarılır; JSON dosyasına dokunulmaz,
 yedek olarak kalır. wio.db'nin tüm metotları desteklenir; bilinçli olarak yapılan
 az sayıdaki fark (0 bakiyede `substr` gibi hata düzeltmeleri, anahtar sıralaması,
-`YamlDatabase` olmaması) [docs/compat-wiodb.md](docs/compat-wiodb.md) içinde listelenmiştir.
+`YamlDatabase` olmaması) [docs/compat-wiodb.md](compat-wiodb.md) içinde listelenmiştir.
 
 Aynı `.sqlite` dosyası daha sonra `new Depo("databases/db.sqlite")` ile açılabilir.
 
@@ -191,7 +191,7 @@ Aynı `.sqlite` dosyası daha sonra `new Depo("databases/db.sqlite")` ile açıl
 dönüştürmeniz gereken bir şey yoktur ve `better-sqlite3` paketini kaldırabilirsiniz.
 Geri dönerseniz dosya quick.db ile okunabilir kalır. Async API ve dönüş değerleri
 aynıdır; farklar (yalnızca `SqliteDriver`/`MemoryDriver`, iki hata düzeltmesi,
-atomik işlemler) [docs/compat-quickdb.md](docs/compat-quickdb.md) içindedir.
+atomik işlemler) [docs/compat-quickdb.md](compat-quickdb.md) içindedir.
 
 ## `depo migrate`: verileri yerel API'ye taşıma
 
@@ -222,7 +222,7 @@ Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 
 ## Benchmark
 
-Tam sonuçlar, makine bilgileri ve yöntem: [docs/benchmark.md](docs/benchmark.md)
+Tam sonuçlar, makine bilgileri ve yöntem: [docs/benchmark.md](benchmark.md)
 (`npm run bench` ile yeniden üretilebilir).
 
 Windows (NT 10.0.26300), Intel i5-10600K, Node 24.22.0, 3 yeni sürecin medyanı.
@@ -276,7 +276,7 @@ npm run bench      # benchmark, docs/benchmark.md dosyasını yeniden yazar
 npm run fixtures   # gerçek wio.db, quick.db, croxydb ile test/fixtures verilerini yeniden üret
 ```
 
-Tasarım kararları ve gerekçeleri: [docs/decisions.md](docs/decisions.md).
+Tasarım kararları ve gerekçeleri: [docs/decisions.md](decisions.md).
 
 ## Lisans
 
