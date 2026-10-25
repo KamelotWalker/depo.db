@@ -1,5 +1,7 @@
 # Depo
 
+**English** | [Türkçe](https://github.com/KamelotWalker/depo.db/blob/main/README.tr.md)
+
 A key-value database for Node.js on the built-in `node:sqlite` module.
 **Zero dependencies, no native module, no node-gyp**: `npm install` and it works.
 
