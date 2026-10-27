@@ -1,5 +1,6 @@
 import * as sqlite from "node:sqlite";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { types } from "node:util";
 import { DepoError } from "./errors.js";
 
 export type SqliteDatabase = DatabaseSync;
@@ -128,6 +129,9 @@ export class Connection {
   }
 
   transaction<T>(fn: () => T): T {
+    if (types.isAsyncFunction(fn)) {
+      throw new DepoError("Transaction callbacks must be synchronous; remove async/await and complete all database calls before returning");
+    }
     if (this.#depth > 0) return this.#nested(fn);
     retryBusy(() => this.#begin.run(), this.busyTimeout);
     this.#depth = 1;

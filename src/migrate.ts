@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { DEFAULT_NAMESPACE } from "./depo.js";
 import { DepoError } from "./errors.js";
 import { Connection, quoteIdentifier, type ConnectionOptions } from "./sqlite.js";
@@ -234,8 +234,15 @@ export function importEntries(
 export function runMigration(options: MigrationOptions): MigrationReport {
   const source = options.source;
   if (!existsSync(source)) throw new DepoError(`Source file not found: ${source}`);
-  const format = options.format ?? detectFormat(source);
   const target = options.target ?? "depo.sqlite";
+  if (existsSync(target)) {
+    const sourceInfo = statSync(source, { bigint: true });
+    const targetInfo = statSync(target, { bigint: true });
+    if (sourceInfo.dev === targetInfo.dev && sourceInfo.ino === targetInfo.ino) {
+      throw new DepoError("Source and target refer to the same file. Choose a separate --to path; migration never modifies the source.");
+    }
+  }
+  const format = options.format ?? detectFormat(source);
   const namespace = options.namespace ?? DEFAULT_NAMESPACE;
   const now = options.now ?? Date.now();
   if (format === "quickdb" && options.namespace !== undefined) {

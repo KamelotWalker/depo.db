@@ -347,6 +347,31 @@ test("transaction rejects async callbacks and rolls back", async (t) => {
   assert.equal(db.has("a"), false);
 });
 
+test("async transaction callbacks never start or resume after rejection", async (t) => {
+  const db = open(t);
+  let invoked = false;
+  const callback = async () => {
+    invoked = true;
+    db.set("before", 1);
+    await Promise.resolve();
+    db.set("after", 2);
+  };
+  assert.throws(() => db.transaction(callback), /remove async\/await/);
+  await Promise.resolve();
+  assert.equal(invoked, false);
+  assert.equal(db.has("before"), false);
+  assert.equal(db.has("after"), false);
+
+  db.transaction(() => {
+    db.set("outer", 1);
+    assert.throws(() => db.transaction(callback), /must be synchronous/);
+    db.set("outer", 2);
+  });
+  await Promise.resolve();
+  assert.equal(invoked, false);
+  assert.equal(db.get("outer"), 2);
+});
+
 test("data persists across reopen; closed instances throw", (t) => {
   const file = join(tempDir(t), "db.sqlite");
   const first = new Depo(file);

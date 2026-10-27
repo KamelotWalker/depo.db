@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, linkSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -225,6 +225,26 @@ test("quick.db SQLite: auto-detected, every table imported, json → default", (
 
   const second = migrateJson(source, "--to", target);
   assert.deepEqual(second.total, { read: 9, inserted: 0, updated: 0, unchanged: 9, conflicts: 0 });
+});
+
+test("migration rejects a source used as its own target, including hard links", (t) => {
+  const dir = tempDir(t);
+  const source = join(dir, "json.sqlite");
+  const alias = join(dir, "alias.sqlite");
+  copyFileSync(join(FIXTURES, "quickdb", "json.sqlite"), source);
+  linkSync(source, alias);
+  const before = readFileSync(source);
+  for (const target of [source, alias]) {
+    for (const dryRun of [false, true]) {
+      const args = ["migrate", source, "--to", target, ...(dryRun ? ["--dry-run"] : [])];
+      const result = depo(...args);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /same file.*separate --to path/);
+      assert.deepEqual(readFileSync(source), before);
+      assert.deepEqual(readFileSync(alias), before);
+    }
+    assert.throws(() => runMigration({ source, target }), /same file/);
+  }
 });
 
 test("quick.db SQLite: --table selects tables; unknown tables fail", (t) => {
