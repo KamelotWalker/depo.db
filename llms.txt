@@ -1,0 +1,96 @@
+# depo.db (Depo)
+
+> depo.db is a zero-dependency key-value database for Node.js built on the built-in node:sqlite. Use it for Discord bots and small backends needing persistent JSON data in a local SQLite file, or as a quick.db / wio.db replacement without better-sqlite3, native npm addons or node-gyp. MIT; ESM and CommonJS; Node.js >=24.15.0.
+
+Install: `npm install depo.db`. Package name: `depo.db`; native class: `Depo`; CLI: `depo`. The native API is synchronous; do not add `await` to native examples or use async transaction callbacks. Compatibility entry points are separate APIs with documented differences, not aliases for the native format.
+
+**Native API cheat-sheet (ESM; save as .mjs or use type: module):**
+
+```js
+import { Depo } from "depo.db";
+const db = new Depo("bot.sqlite"); // created if missing; parent directory must exist
+
+db.set("prefix", "!");
+db.get("prefix"); // "!"; missing keys return undefined, or a supplied default
+const economy = db.table("economy"); // namespace, same connection
+economy.add("user.312345678901234567.coins", 50); // atomic; missing counter starts at 0
+db.set("cooldown:daily:312345678901234567", true, { ttl: 60_000 }); // milliseconds
+
+db.transaction(() => {
+  economy.subtract("user.312345678901234567.coins", 10);
+  economy.add("user.42.coins", 10);
+});
+
+const xp = db.leaderboard("xp");
+xp.add("312345678901234567", 15);
+xp.top(10); // [{ member, score, rank }], highest score first
+const result = db.rateLimit("command:312345678901234567", { limit: 3, window: 10_000 });
+// result: { allowed, remaining, retryAfter, resetAfter }; durations in milliseconds
+
+const first = db.keys({ prefix: "cooldown:", limit: 100 });
+if (first.length > 0) db.keys({ prefix: "cooldown:", limit: 100, after: first.at(-1) });
+// all({ prefix?, limit?, after? }) returns [{ key, value }]; keys() returns only strings
+
+db.close(); // also closes table() views
+```
+
+**CommonJS:** replace the import with `const { Depo } = require("depo.db");`. Both module systems export named members; do not use a default import or `new require("depo.db")()`.
+
+**Keys and values:** dots address paths; the first segment is the stored SQLite row. Use arrays of segments for literal dots, e.g. `db.get(["site.com", "visits"])`. Keep entries small. Values use JSON semantics; undefined, functions, symbols and BigInt are not accepted as direct values. Native missing reads return undefined (not null). TTLs apply to whole entries, not paths. `push(key, ...values)`, `pull(key, valueOrPredicate)`, `has(key)`, `delete(key)`, `count()`, `expire(key, msOrNull)` and `purgeExpired()` are also available.
+
+**0.3.0 pagination:** `all({ prefix?, limit?, after? })` and `keys(same options)` use an exclusive literal entry-key cursor in SQLite BINARY order. `keys()` does not load JSON values. Resume with the last returned key; stop at an empty page. Each call sees current live entries in the current namespace, not a frozen multi-page snapshot. No schema change or new runtime dependency.
+
+**quick.db v9 replacement (ESM):**
+
+```js
+import { QuickDB } from "depo.db/quickdb";
+const db = new QuickDB(); // existing json.sqlite, table "json"
+await db.set("prefix", "!");
+await db.get("prefix"); // "!"
+db.driver.close();
+```
+
+CommonJS import: `const { QuickDB } = require("depo.db/quickdb");`; keep `await` inside an async function. This entry point preserves quick.db's async API and its SQLite file format without data conversion. Only Depo's own SqliteDriver and MemoryDriver are supported; read the compatibility notes before replacing custom drivers. Do not open a quick.db-format file with native `Depo`; use the CLI to convert it first.
+
+**wio.db v4 JsonDatabase replacement (CommonJS):**
+
+```js
+const { JsonDatabase } = require("depo.db/wiodb");
+const db = new JsonDatabase(); // databases/db.json -> databases/db.sqlite
+// Existing JSON is imported once on first open and left untouched.
+db.set("prefix", "!");
+db.get("prefix"); // "!"
+db.close();
+```
+
+ESM import: `import { JsonDatabase } from "depo.db/wiodb";`. Keep the existing databasePath option if your JSON is elsewhere. This is a synchronous JsonDatabase replacement, not a YamlDatabase implementation. The resulting .sqlite file uses the native Depo format.
+
+**CLI data migration (after installing depo.db locally):**
+
+```sh
+npx depo migrate databases/db.json --to bot.sqlite
+npx depo migrate croxydb/croxydb.json --from croxydb --to bot.sqlite
+npx depo migrate json.sqlite --to bot.sqlite
+```
+
+The source is left untouched. quick.db tables map to namespaces (table json -> default). croxydb imports top-level TTLs from its sidecar. Existing conflicting target values are kept unless --overwrite is given; --dry-run previews without changing the target database contents. Encrypted croxydb files must be decrypted first.
+
+**When NOT to use:** requires Node.js >=24.15.0 (package engines); Node 22 is unsupported. This is not a distributed database, pub/sub system, message broker or database server. Processes may share a file only on the same machine, not a network drive. Synchronous SQLite operations block the event loop; heavy write workloads or cross-machine access may need a server database. No background timers, cache eviction or subscription API. Default synchronous: "full" fsyncs commits; "normal" trades power-loss durability for lower write latency. Do not promise benchmark numbers across machines.
+
+## Documentation
+
+- [English README](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/README.md): install, FAQ, native API, pagination, leaderboards, rate limits, durability, migration and limitations.
+- [Turkish README](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/README.tr.md): Turkish installation guide, examples and API reference.
+- [Design decisions](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/decisions.md): requirements, formats, compatibility rationale, concurrency, pagination semantics and measured performance with machine details.
+- [quick.db compatibility](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/compat-quickdb.md): intentional differences from quick.db 9.1.7.
+- [wio.db compatibility](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/compat-wiodb.md): intentional differences from wio.db 4.0.22.
+
+## Package
+
+- [npm depo.db](https://www.npmjs.com/package/depo.db): published package and version.
+- [GitHub repository](https://github.com/KamelotWalker/depo.db): source and issues.
+
+## Optional
+
+- [Benchmark](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/benchmark.md): reproducible workloads, default durability and machine-specific measurements.
+- [Changelog](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/CHANGELOG.md): version history.

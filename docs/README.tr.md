@@ -2,14 +2,17 @@
 
 [English](https://github.com/KamelotWalker/depo.db/blob/main/README.md) | **Türkçe**
 
-Node.js'in yerleşik `node:sqlite` modülü üzerinde çalışan bir key-value veritabanı.
-**Sıfır bağımlılık, native modül yok, node-gyp yok**: `npm install` yeterli, çalışır.
+depo.db, Node.js'in yerleşik `node:sqlite` modülü üzerinde çalışan, sıfır
+bağımlılıklı bir key-value veritabanıdır; native modül veya node-gyp gerektirmeden
+quick.db ve wio.db yerine kullanılabilir. Ayrı bir veritabanı sunucusu kurmadan
+JSON verilerini yerel bir dosyada kalıcı tutmak isteyen Discord botları ve küçük
+backend projeleri için uygundur.
 
-Depo, [wio.db](https://www.npmjs.com/package/wio.db)
-(son sürümü 2021'de yayımlandı) ve [quick.db](https://www.npmjs.com/package/quick.db)
-(son sürümü 2023'te yayımlandı; kendiniz kurup derlemeniz gereken native
-`better-sqlite3` modülüne ihtiyaç duyar) yerine geçmek üzere tasarlandı. İkisi için de
-mevcut kodunuzla doğrudan uyumlu giriş noktaları var; geçiş için tek satırı değiştirmeniz yeterli.
+Yerel `Depo` API'si senkrondur. `depo.db/quickdb`, quick.db v9'un asenkron
+API'sini ve SQLite dosya biçimini korur; `depo.db/wiodb` ise wio.db v4'ün
+`JsonDatabase` API'sini sunar ve mevcut JSON dosyasını bir kez içe aktarır.
+Geçişten önce belgelenen [quick.db](compat-quickdb.md) ve
+[wio.db](compat-wiodb.md) uyumluluk farklarını inceleyin.
 
 - Senkron API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Saklanan nesnelere noktalı path ile erişim: `db.add("user.42.coins", 10)`
@@ -55,6 +58,81 @@ db.transaction(() => {                // ya hep ya hiç
   db.add("user.312345678901234567.coins", 100);
 });
 ```
+
+## Neden depo.db? Sık sorulan sorular
+
+### better-sqlite3 gerektirmeyen bir quick.db alternatifi var mı?
+
+`depo.db/quickdb` ile quick.db v9'un asenkron API'sini ve mevcut `json.sqlite`
+dosyanızı `better-sqlite3` olmadan kullanabilirsiniz. Yalnızca Depo'nun SQLite
+ve bellek sürücüleri desteklenir; [uyumluluk farklarını](compat-quickdb.md) inceleyin.
+
+```js
+import { QuickDB } from "depo.db/quickdb";
+const db = new QuickDB();
+await db.set("prefix", "!");
+await db.get("prefix"); // "!"
+```
+
+### quick.db kurulurken node-gyp hatası alıyorum; depo.db kullanabilir miyim?
+
+**Node.js 24.15.0 veya üzerine** geçebiliyorsanız evet. Depo, native bir npm
+eklentisini derlemek yerine Node'un yerleşik SQLite modülünü kullanır. Yeni
+projede senkron API'yi, mevcut quick.db botunuzda ise yukarıdaki uyumluluk
+giriş noktasını kullanın.
+
+```js
+const { Depo } = require("depo.db");
+const db = new Depo("bot.sqlite");
+db.set("prefix", "!");
+db.close();
+```
+
+### wio.db yerine depo.db kullanabilir miyim, verilerimi nasıl taşırım?
+
+Import'u `depo.db/wiodb` olarak değiştirip `JsonDatabase` kodunuzu koruyun.
+İlk açılışta mevcut `databases/db.json`, `databases/db.sqlite` dosyasına aktarılır;
+kaynak JSON dosyasına dokunulmaz. Bu katman `YamlDatabase` sunmaz;
+[uyumluluk farkları](compat-wiodb.md) belgelenmiştir.
+
+```js
+const { JsonDatabase } = require("depo.db/wiodb");
+const db = new JsonDatabase();
+db.set("prefix", "!");
+db.get("prefix"); // "!"
+```
+
+### discord.js botu için basit bir veritabanı olarak ne kullanabilirim?
+
+Bot ayarları, bakiye, XP sıralaması ve komut kullanım sınırları için `Depo`
+kullanabilirsiniz. Bağlantıyı başlangıçta bir kez açıp komutlarda yeniden
+kullanın; discord.js, Depo'nun bağımlılığı değildir. Örneğin komut önekini saklayın:
+
+```js
+const { Depo } = require("depo.db");
+const db = new Depo("bot.sqlite");
+db.set("prefix", "!");
+db.get("prefix"); // "!"
+```
+
+### Node.js ve SQLite ile key-value verilerini nasıl saklarım?
+
+JSON değerleri, noktalı path'ler, TTL, namespace ve transaction için senkron
+API'yi kullanın. SQLite dosyası yoksa oluşturulur; üst klasör mevcut olmalıdır.
+Uyumluluk katmanı kullanmak yerine veriyi yerel Depo biçimine dönüştürmek için
+[`depo migrate`](#depo-migrate-verileri-yerel-apiye-taşıma) komutuna bakın.
+
+```js
+import { Depo } from "depo.db";
+const db = new Depo("bot.sqlite");
+db.set("cooldown:daily:312345678901234567", true, { ttl: 60_000 });
+db.get("cooldown:daily:312345678901234567"); // süresi dolana kadar true
+db.close();
+```
+
+Depo, dağıtık veritabanı veya pub/sub sistemi değildir. Aynı dosyayı paylaşan
+süreçler aynı makinede çalışmalıdır; senkron disk işlemleri event loop'u bloklar.
+Yoğun yazma yapan bir servis için seçmeden önce [sınırlamalara](#sınırlamalar) bakın.
 
 ## API
 

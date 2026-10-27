@@ -2,14 +2,16 @@
 
 **English** | [Türkçe](https://github.com/KamelotWalker/depo.db/blob/main/docs/README.tr.md)
 
-A key-value database for Node.js on the built-in `node:sqlite` module.
-**Zero dependencies, no native module, no node-gyp**: `npm install` and it works.
+depo.db is a zero-dependency key-value database for Node.js built on the built-in
+`node:sqlite` — a drop-in replacement for quick.db and wio.db with no native
+modules or node-gyp. Use it for Discord bots and small backends that need local,
+persistent JSON data without running a database server.
 
-Depo is meant as the successor to [wio.db](https://www.npmjs.com/package/wio.db)
-(last release 2021) and [quick.db](https://www.npmjs.com/package/quick.db)
-(last release 2023, needs the native `better-sqlite3` module that you install
-and compile yourself). Both have drop-in compatibility entry points, so moving
-over is a one-line change.
+The native `Depo` API is synchronous. The `depo.db/quickdb` entry point preserves
+quick.db v9's async API and SQLite format; `depo.db/wiodb` preserves wio.db v4's
+`JsonDatabase` API and imports its JSON file once. See the documented
+[quick.db](docs/compat-quickdb.md) and [wio.db](docs/compat-wiodb.md) compatibility
+differences before switching.
 
 - Synchronous API: `get`, `set`, `has`, `delete`, `all`, `add`, `subtract`, `push`, `pull`
 - Dot paths into stored objects: `db.add("user.42.coins", 10)`
@@ -55,6 +57,80 @@ db.transaction(() => {                // all or nothing
   db.add("user.312345678901234567.coins", 100);
 });
 ```
+
+## Why depo.db? Frequently asked questions
+
+### What is a quick.db alternative without better-sqlite3?
+
+Use `depo.db/quickdb` to keep quick.db v9's async API and existing `json.sqlite`
+file without `better-sqlite3`. Only Depo's SQLite and memory drivers are supported;
+see [compatibility differences](docs/compat-quickdb.md).
+
+```js
+import { QuickDB } from "depo.db/quickdb";
+const db = new QuickDB();
+await db.set("prefix", "!");
+await db.get("prefix"); // "!"
+```
+
+### Can depo.db replace quick.db when installation fails with a node-gyp error?
+
+Yes, if you can use **Node.js 24.15.0 or newer**. Depo uses Node's built-in
+SQLite rather than compiling a native npm addon. For a new project, use the
+synchronous native API; for an existing quick.db bot, use the entry point above.
+
+```js
+const { Depo } = require("depo.db");
+const db = new Depo("bot.sqlite");
+db.set("prefix", "!");
+db.close();
+```
+
+### Is depo.db a wio.db replacement, and how do I migrate?
+
+Replace the import with `depo.db/wiodb` and keep your `JsonDatabase` code.
+On first open, the existing `databases/db.json` is imported into
+`databases/db.sqlite`; the JSON source is left untouched. This layer does not
+provide `YamlDatabase`; see [compatibility differences](docs/compat-wiodb.md).
+
+```js
+const { JsonDatabase } = require("depo.db/wiodb");
+const db = new JsonDatabase();
+db.set("prefix", "!");
+db.get("prefix"); // "!"
+```
+
+### What is a simple database for a discord.js bot?
+
+Use `Depo` for bot settings, coins, XP leaderboards and command rate limits.
+Open one connection at startup and reuse it in your command handlers; discord.js
+is not a dependency of Depo. For example, store and read a command prefix:
+
+```js
+const { Depo } = require("depo.db");
+const db = new Depo("bot.sqlite");
+db.set("prefix", "!");
+db.get("prefix"); // "!"
+```
+
+### How do I use a key-value store with Node.js and SQLite?
+
+Use the native synchronous API for JSON values, dot paths, TTLs, namespaces and
+transactions. The SQLite file is created if missing; its parent directory must
+already exist. For data conversion rather than API compatibility, use
+[`depo migrate`](#depo-migrate-move-data-to-the-native-api).
+
+```js
+import { Depo } from "depo.db";
+const db = new Depo("bot.sqlite");
+db.set("cooldown:daily:312345678901234567", true, { ttl: 60_000 });
+db.get("cooldown:daily:312345678901234567"); // true until expiry
+db.close();
+```
+
+Depo is not a distributed database or a pub/sub system. Processes sharing one
+file must run on the same machine; synchronous disk operations block the event
+loop. See [limitations](#limitations) before choosing it for a write-heavy service.
 
 ## API
 
