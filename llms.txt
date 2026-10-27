@@ -40,7 +40,7 @@ db.close(); // also closes table() views
 
 **0.3.0 pagination:** `all({ prefix?, limit?, after? })` and `keys(same options)` use an exclusive literal entry-key cursor in SQLite BINARY order. `keys()` does not load JSON values. Resume with the last returned key; stop at an empty page. Each call sees current live entries in the current namespace, not a frozen multi-page snapshot. No schema change or new runtime dependency.
 
-**Online backup (0.3.0):** `await db.backup("new-backup.sqlite")` copies the entire database, including committed WAL data, all namespaces, absolute TTLs, leaderboards, rate limits and metadata. Target must not already exist and its parent must exist. Await success before opening the target or closing the source; no backup inside transactions. CLI: `npx depo backup bot.sqlite --to new-backup.sqlite` reads its source read-only. Writes can continue; completion is consistent, not a frozen start-time snapshot. A crash can leave an incomplete target; only successful completion certifies it. Do not copy only the main live WAL database file.
+**Online backup (0.3.0):** `await db.backup("new-backup-api.sqlite")` copies the entire database, including committed WAL data, all namespaces, absolute TTLs, leaderboards, rate limits and metadata. Target must not already exist and its parent must exist. Await success before opening the target or closing the source; no backup inside transactions. CLI: `npx depo backup bot.sqlite --to new-backup-cli.sqlite` reads its source read-only; this distinct fresh target avoids a collision with the API example. Writes can continue; completion is consistent, not a frozen start-time snapshot. A crash can leave an incomplete target; only successful completion certifies it. Do not copy only the main live WAL database file.
 
 **quick.db v9 replacement (ESM):**
 
@@ -70,12 +70,12 @@ ESM import: `import { JsonDatabase } from "depo.db/wiodb";`. Keep the existing d
 **CLI data migration (after installing depo.db locally):**
 
 ```sh
-npx depo migrate databases/db.json --to bot.sqlite
-npx depo migrate croxydb/croxydb.json --from croxydb --to bot.sqlite
-npx depo migrate json.sqlite --to bot.sqlite
+npx depo migrate databases/db.json --to from-wio.sqlite
+npx depo migrate croxydb/croxydb.json --from croxydb --to from-croxy.sqlite
+npx depo migrate json.sqlite --to from-quick.sqlite
 ```
 
-The source is left untouched. Choose a separate target: a destination aliasing the source (including hard links/symlinks) is rejected. quick.db tables map to namespaces (table json -> default). croxydb imports top-level TTLs from its sidecar. Existing conflicting target values are kept unless --overwrite is given; --dry-run previews without changing the target database contents. Encrypted croxydb files must be decrypted first.
+Each source uses a separate target, and is left untouched. A destination aliasing the source (including hard links/symlinks) is rejected. quick.db tables map to namespaces (table json -> default). croxydb imports top-level TTLs from its sidecar. Existing conflicting target values are kept unless --overwrite is given; --dry-run previews without changing the target database contents. Encrypted croxydb files must be decrypted first.
 
 **When NOT to use:** requires Node.js >=24.15.0 (package engines); Node 22 is unsupported. This is not a distributed database, pub/sub system, message broker or database server. Processes may share a file only on the same machine, not a network drive. Synchronous SQLite operations block the event loop; heavy write workloads or cross-machine access may need a server database. No background timers, cache eviction or subscription API. Default synchronous: "full" fsyncs commits; "normal" trades power-loss durability for lower write latency. Do not promise benchmark numbers across machines.
 
@@ -87,7 +87,7 @@ The source is left untouched. Choose a separate target: a destination aliasing t
 - [quick.db compatibility](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/compat-quickdb.md): intentional differences from quick.db 9.1.7.
 - [wio.db compatibility](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/docs/compat-wiodb.md): intentional differences from wio.db 4.0.22.
 - [Runnable Discord-style handler](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/examples/discord-commands.mjs): `node examples/discord-commands.mjs [bot.sqlite]` after building a checkout; no Discord dependency/token/network. Per-guild settings, atomic no-overdraft transfers, XP ranking and persistent rate-limit cooldowns. Adapter supplies trusted permissions and reply().
-- [Runnable quick.db migration](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/examples/migrate-quickdb.mjs): `node examples/migrate-quickdb.mjs json.sqlite bot.sqlite` invokes the real migration CLI and reads native namespace samples; stop source writers and keep a separate target. Both demos run in the test suite and ship under node_modules/depo.db/examples/.
+- [Runnable quick.db migration](https://raw.githubusercontent.com/KamelotWalker/depo.db/main/examples/migrate-quickdb.mjs): `node examples/migrate-quickdb.mjs json.sqlite from-quick-example.sqlite` invokes the real migration CLI and reads native namespace samples; stop source writers and keep a separate target. Both demos run in the test suite and ship under node_modules/depo.db/examples/.
 
 ## Package
 

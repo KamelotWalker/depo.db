@@ -8,7 +8,8 @@ quick.db ve wio.db yerine kullanılabilir. Ayrı bir veritabanı sunucusu kurmad
 JSON verilerini yerel bir dosyada kalıcı tutmak isteyen Discord botları ve küçük
 backend projeleri için uygundur.
 
-Yerel `Depo` API'si senkrondur. `depo.db/quickdb`, quick.db v9'un asenkron
+Yerel `Depo` API'si, bağlantı kapatılmadan önce await edilmesi gereken bir promise
+döndüren çevrimiçi `backup()` dışında senkrondur. `depo.db/quickdb`, quick.db v9'un asenkron
 API'sini ve SQLite dosya biçimini korur; `depo.db/wiodb` ise wio.db v4'ün
 `JsonDatabase` API'sini sunar ve mevcut JSON dosyasını bir kez içe aktarır.
 Geçişten önce belgelenen [quick.db](compat-quickdb.md) ve
@@ -57,6 +58,7 @@ db.transaction(() => {                // ya hep ya hiç
   economy.subtract("bank", 100);
   db.add("user.312345678901234567.coins", 100);
 });
+db.close(); // table() görünümlerini de kapatır
 ```
 
 ## Çalıştırılabilir örnekler
@@ -66,7 +68,7 @@ Kaynak kod deposunda bağımlılıkları kurup `npm run build` çalıştırdıkt
 ```sh
 node examples/discord-commands.mjs              # yerel demo, bellek içi veritabanı
 node examples/discord-commands.mjs bot.sqlite   # demo verilerini sonraki çalıştırmaya saklar
-node examples/migrate-quickdb.mjs json.sqlite bot.sqlite
+node examples/migrate-quickdb.mjs json.sqlite from-quick-example.sqlite
 ```
 
 - [Discord tarzı komut işleyici](../examples/discord-commands.mjs): enjekte edilen
@@ -92,10 +94,11 @@ dosyanızı `better-sqlite3` olmadan kullanabilirsiniz. Yalnızca Depo'nun SQLit
 ve bellek sürücüleri desteklenir; [uyumluluk farklarını](compat-quickdb.md) inceleyin.
 
 ```js
-import { QuickDB } from "depo.db/quickdb";
-const db = new QuickDB();
+import { QuickDB, MemoryDriver } from "depo.db/quickdb";
+const db = new QuickDB({ driver: new MemoryDriver() }); // bağımsız API demosu
 await db.set("prefix", "!");
 await db.get("prefix"); // "!"
+db.driver.close();
 ```
 
 ### quick.db kurulurken node-gyp hatası alıyorum; depo.db kullanabilir miyim?
@@ -107,7 +110,7 @@ giriş noktasını kullanın.
 
 ```js
 const { Depo } = require("depo.db");
-const db = new Depo("bot.sqlite");
+const db = new Depo(":memory:");
 db.set("prefix", "!");
 db.close();
 ```
@@ -124,6 +127,7 @@ const { JsonDatabase } = require("depo.db/wiodb");
 const db = new JsonDatabase();
 db.set("prefix", "!");
 db.get("prefix"); // "!"
+db.close();
 ```
 
 ### discord.js botu için basit bir veritabanı olarak ne kullanabilirim?
@@ -134,9 +138,10 @@ kullanın; discord.js, Depo'nun bağımlılığı değildir. Örneğin komut ön
 
 ```js
 const { Depo } = require("depo.db");
-const db = new Depo("bot.sqlite");
+const db = new Depo(":memory:");
 db.set("prefix", "!");
 db.get("prefix"); // "!"
+db.close();
 ```
 
 ### Node.js ve SQLite ile key-value verilerini nasıl saklarım?
@@ -205,10 +210,13 @@ Tip belirtilen okumalar: `db.get<number>("coins")`, `number | undefined` döndü
 Anahtar, noktalarla ayrılmış parçalardan oluşan bir string veya parçalardan oluşan bir dizidir.
 
 ```js
+import { Depo, escapeKey } from "depo.db";
+const db = new Depo(":memory:");
 db.set("user.42.name", "Ayşe");       // "user" kaydı → { "42": { name: "Ayşe" } }
 db.get(["user", "42", "name"]);       // aynı işlem, kaçış karakteri gerekmez
 db.set("site\\.com.visits", 1);       // "site.com" kaydı → { visits: 1 }
 db.get(`${escapeKey("site.com")}.visits`);
+db.close();
 ```
 
 - **İlk parça kaydın anahtarıdır** ve tek bir SQLite satırı olarak saklanır. Geri
@@ -246,9 +254,16 @@ Değerler JSON olarak saklanır: nesneler, diziler, string'ler, sayılar, boolea
 Tüm kullanıcıları belleğe yüklemek yerine belirli boyutlu sayfalarla işleyin:
 
 ```js
+import { deepEqual } from "node:assert/strict";
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+db.set("user:1", { name: "Ayşe" });
+db.set("user:2", { name: "Efe" });
+db.set("user:3", { name: "Deniz" });
+
 let after;
 for (;;) {
-  const page = db.all({ prefix: "user:", limit: 100, after });
+  const page = db.all({ prefix: "user:", limit: 2, after });
   if (page.length === 0) break;
   for (const { key, value } of page) {
     console.log(key, value);
@@ -257,8 +272,11 @@ for (;;) {
 }
 
 // Yalnızca adlar mı gerekli? JSON değerleri yüklenmez veya ayrıştırılmaz.
-const firstKeys = db.keys({ prefix: "user:", limit: 100 });
-const nextKeys = db.keys({ prefix: "user:", limit: 100, after: firstKeys.at(-1) });
+const firstKeys = db.keys({ prefix: "user:", limit: 2 });
+const nextKeys = db.keys({ prefix: "user:", limit: 2, after: firstKeys.at(-1) });
+deepEqual(firstKeys, ["user:1", "user:2"]);
+deepEqual(nextKeys, ["user:3"]);
+db.close();
 ```
 
 `prefix` ve `after`, noktalı path değil, **gerçek üst seviye kayıt anahtarlarıdır**:
@@ -279,9 +297,13 @@ içinde okuyun (mevcut yazma kilidi bu süre boyunca tutulur).
 ## TTL
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const token = "local-demo-token"; // örnek oturum değeri, bot kimlik bilgisi değil
 db.set("session", { token }, { ttl: 60_000 });
 db.ttl("session");          // ~60000
 db.expire("session", null); // sonsuza kadar sakla
+db.close();
 ```
 
 Süresi dolan kayıtlar tüm okumalardan anında kaybolur. Satırları, dosya açılırken
@@ -294,6 +316,12 @@ Bir kaydın tamamını `ttl` olmadan yazmak TTL'ini kaldırır; path'e yazma iş
 Her kullanıcının JSON verisini okuyup sıralamak yerine XP sıralamasını bir sıralı kümede tutun:
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const message = {
+  guildId: "100", author: { id: "312345678901234567" },
+  reply: (text) => console.log(text), // yerel adaptör; Discord istemcisi veya ağ yok
+};
 const xp = db.table(`guild:${message.guildId}`).leaderboard("xp");
 xp.add(message.author.id, 15); // birden fazla shard XP verse de atomiktir
 const top10 = xp.top(10);
@@ -301,6 +329,7 @@ await message.reply(
   top10.map(({ member, score, rank }) => `${rank}. <@${member}> — ${score} XP`).join("\n") +
   `\nSen ${xp.rank(message.author.id)}. sıradasın!`
 );
+db.close();
 ```
 
 | `Leaderboard` metodu | Dönüş değeri | |
@@ -329,12 +358,19 @@ bir kullanım hakkı yenilensin. GCRA, anahtar başına tek bir varış zamanı 
 reddedilen çağrılar kapasite tüketmez.
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const message = {
+  author: { id: "312345678901234567" },
+  reply: (text) => console.log(text), // yerel adaptör; Discord istemcisi veya ağ yok
+};
 const result = db.rateLimit(`daily:${message.author.id}`, { limit: 3, window: 10_000 });
 if (!result.allowed) {
   await message.reply(`Biraz yavaşla! ${result.retryAfter} ms sonra tekrar deneyebilirsin.`);
 } else {
   await message.reply(`Komut kabul edildi. ${result.remaining} kullanım hakkın kaldı.`);
 }
+db.close();
 ```
 
 `RateLimitResult`, `{ allowed, remaining, retryAfter, resetAfter }` biçimindedir:
@@ -379,19 +415,24 @@ Yazılabilir açılışlarda aynı temizlik yapılır; arka planda zamanlayıcı
 ## Yedekler
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo("backup-source.sqlite");
+db.set("prefix", "!");
 // ESM'de üst seviyede veya CommonJS'te bir async fonksiyon içinde:
-await db.backup("bot-yedek.sqlite");
+await db.backup("bot-backup-api.sqlite");
 db.close();
 ```
 
 ```sh
-npx depo backup bot.sqlite --to bot-yedek.sqlite
+npx depo backup backup-source.sqlite --to bot-backup-cli.sqlite
 ```
+
+API ve CLI örnekleri sırayla çalışabilmeleri için farklı, yeni hedefler kullanır.
 
 Yerleşik SQLite çevrimiçi yedekleme API'si, commit edilmiş WAL verilerini ve tüm
 namespace'leri, liderlik tablolarını, kullanım sınırlarını ve metadata kayıtlarını
 kapsar. `table()` görünümü de **dosyanın tamamını** yedekler. Tamamlanan yedeği
-`new Depo("bot-yedek.sqlite")` ile açabilirsiniz; canlı veritabanının yerine
+`new Depo("bot-backup-api.sqlite")` ile açabilirsiniz; canlı veritabanının yerine
 kullanmak için önce eski bağlantıyı durdurun. TTL'ler yeniden başlamaz; mutlak
 sona erme zamanlarını korur.
 
@@ -439,13 +480,15 @@ atomik işlemler) [docs/compat-quickdb.md](compat-quickdb.md) içindedir.
 ## `depo migrate`: verileri yerel API'ye taşıma
 
 ```sh
-npx depo migrate databases/db.json --to bot.sqlite                 # wio.db
-npx depo migrate croxydb/croxydb.json --from croxydb --to bot.sqlite  # croxydb, TTL'leri korur
-npx depo migrate json.sqlite --to bot.sqlite                        # quick.db, tüm tablolar
+npx depo migrate databases/db.json --to from-wio.sqlite                 # wio.db
+npx depo migrate croxydb/croxydb.json --from croxydb --to from-croxy.sqlite  # croxydb, TTL'leri korur
+npx depo migrate json.sqlite --to from-quick.sqlite                      # quick.db, tüm tablolar
 ```
 
+Her kaynak ayrı bir hedef kullanır. İlk komutun temsili çıktısı:
+
 ```
-databases/db.json (wio) -> bot.sqlite
+databases/db.json (wio) -> from-wio.sqlite
   databases/db.json -> namespace "default": read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 ```
@@ -514,6 +557,22 @@ Daha düşük değer daha iyidir; kütüphaneler varsayılan ayarlarıyla kullan
 
 ```sh
 npm install
+```
+
+Depo geliştirilirken uyumluluk testleri ve benchmark'lar için gerçek eski motorlar
+**devDependency** olarak kullanılır. Uygulamanıza `depo.db` kurmanın aksine, bu
+kurulum native derleme araçları gerektirebilir. npm, `better-sqlite3` kurulum
+betiklerini engellediğini bildirirse testlerden önce bu geliştirme bağımlılığına
+yalnızca yerel projede izin verin:
+
+```sh
+npm install-scripts approve better-sqlite3
+npm rebuild better-sqlite3 --foreground-scripts
+```
+
+Ardından geliştirme komutlarını çalıştırın:
+
+```sh
 npm test           # build + tüm testler (node:test)
 npm run typecheck  # tsc strict, çıktı üretmez
 npm run smoke      # paketle, geçici projeye kur, ESM/CJS/TypeScript tüketicilerini çalıştır
@@ -521,6 +580,10 @@ npm run attw       # paket export'larını/tiplerini @arethetypeswrong/cli ile k
 npm run bench      # benchmark, docs/benchmark.md dosyasını yeniden yazar
 npm run fixtures   # gerçek wio.db, quick.db, croxydb ile test/fixtures verilerini yeniden üret
 ```
+
+`node scripts/readme.mjs`, bu dosya, İngilizce README ve `llms.txt` içindeki tüm
+JavaScript kod bloklarını derlenmiş paketin genel API'siyle ESM ve CommonJS olarak
+bağımsız çalıştırır. Her çalıştırma yeni bir çalışma klasörü kullanır; bot istemcisi gerekmez.
 
 Tasarım kararları ve gerekçeleri: [docs/decisions.md](decisions.md).
 

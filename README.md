@@ -7,7 +7,8 @@ depo.db is a zero-dependency key-value database for Node.js built on the built-i
 modules or node-gyp. Use it for Discord bots and small backends that need local,
 persistent JSON data without running a database server.
 
-The native `Depo` API is synchronous. The `depo.db/quickdb` entry point preserves
+The native `Depo` API is synchronous except for online `backup()`, which returns
+a promise and must be awaited before closing the connection. `depo.db/quickdb` preserves
 quick.db v9's async API and SQLite format; `depo.db/wiodb` preserves wio.db v4's
 `JsonDatabase` API and imports its JSON file once. See the documented
 [quick.db](docs/compat-quickdb.md) and [wio.db](docs/compat-wiodb.md) compatibility
@@ -56,6 +57,7 @@ db.transaction(() => {                // all or nothing
   economy.subtract("bank", 100);
   db.add("user.312345678901234567.coins", 100);
 });
+db.close(); // also closes table() views
 ```
 
 ## Runnable examples
@@ -65,7 +67,7 @@ After installing dependencies and running `npm run build` in a source checkout:
 ```sh
 node examples/discord-commands.mjs              # local demo, in-memory database
 node examples/discord-commands.mjs bot.sqlite   # retain demo data between runs
-node examples/migrate-quickdb.mjs json.sqlite bot.sqlite
+node examples/migrate-quickdb.mjs json.sqlite from-quick-example.sqlite
 ```
 
 - [Discord-style command handler](examples/discord-commands.mjs): injectable
@@ -91,10 +93,11 @@ file without `better-sqlite3`. Only Depo's SQLite and memory drivers are support
 see [compatibility differences](docs/compat-quickdb.md).
 
 ```js
-import { QuickDB } from "depo.db/quickdb";
-const db = new QuickDB();
+import { QuickDB, MemoryDriver } from "depo.db/quickdb";
+const db = new QuickDB({ driver: new MemoryDriver() }); // isolated API demo
 await db.set("prefix", "!");
 await db.get("prefix"); // "!"
+db.driver.close();
 ```
 
 ### Can depo.db replace quick.db when installation fails with a node-gyp error?
@@ -105,7 +108,7 @@ synchronous native API; for an existing quick.db bot, use the entry point above.
 
 ```js
 const { Depo } = require("depo.db");
-const db = new Depo("bot.sqlite");
+const db = new Depo(":memory:");
 db.set("prefix", "!");
 db.close();
 ```
@@ -122,6 +125,7 @@ const { JsonDatabase } = require("depo.db/wiodb");
 const db = new JsonDatabase();
 db.set("prefix", "!");
 db.get("prefix"); // "!"
+db.close();
 ```
 
 ### What is a simple database for a discord.js bot?
@@ -132,9 +136,10 @@ is not a dependency of Depo. For example, store and read a command prefix:
 
 ```js
 const { Depo } = require("depo.db");
-const db = new Depo("bot.sqlite");
+const db = new Depo(":memory:");
 db.set("prefix", "!");
 db.get("prefix"); // "!"
+db.close();
 ```
 
 ### How do I use a key-value store with Node.js and SQLite?
@@ -203,10 +208,13 @@ Typed reads: `db.get<number>("coins")` returns `number | undefined`;
 A key is a string of segments separated by dots, or an array of segments.
 
 ```js
+import { Depo, escapeKey } from "depo.db";
+const db = new Depo(":memory:");
 db.set("user.42.name", "Ayşe");       // entry "user" → { "42": { name: "Ayşe" } }
 db.get(["user", "42", "name"]);       // same thing, no escaping needed
 db.set("site\\.com.visits", 1);       // entry "site.com" → { visits: 1 }
 db.get(`${escapeKey("site.com")}.visits`);
+db.close();
 ```
 
 - The **first segment is the entry**, stored as one SQLite row. The rest is a
@@ -243,9 +251,16 @@ Values are stored as JSON: objects, arrays, strings, numbers, booleans, `null`.
 Process a bounded page at a time instead of loading every user into memory:
 
 ```js
+import { deepEqual } from "node:assert/strict";
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+db.set("user:1", { name: "Ayşe" });
+db.set("user:2", { name: "Efe" });
+db.set("user:3", { name: "Deniz" });
+
 let after;
 for (;;) {
-  const page = db.all({ prefix: "user:", limit: 100, after });
+  const page = db.all({ prefix: "user:", limit: 2, after });
   if (page.length === 0) break;
   for (const { key, value } of page) {
     console.log(key, value);
@@ -254,8 +269,11 @@ for (;;) {
 }
 
 // Only need names? No JSON values are loaded or parsed.
-const firstKeys = db.keys({ prefix: "user:", limit: 100 });
-const nextKeys = db.keys({ prefix: "user:", limit: 100, after: firstKeys.at(-1) });
+const firstKeys = db.keys({ prefix: "user:", limit: 2 });
+const nextKeys = db.keys({ prefix: "user:", limit: 2, after: firstKeys.at(-1) });
+deepEqual(firstKeys, ["user:1", "user:2"]);
+deepEqual(nextKeys, ["user:3"]);
+db.close();
 ```
 
 `prefix` and `after` are **literal top-level entry keys**, not dot paths: pass
@@ -274,9 +292,13 @@ a synchronous `db.transaction()` (which holds the existing write lock).
 ## TTL
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const token = "local-demo-token"; // illustrative session value, not a bot credential
 db.set("session", { token }, { ttl: 60_000 });
 db.ttl("session");          // ~60000
 db.expire("session", null); // keep forever
+db.close();
 ```
 
 Expired entries disappear from every read at once. Their rows are deleted when
@@ -289,6 +311,12 @@ and `pull` keep it.
 Keep XP rankings in a sorted set instead of loading and sorting every user's JSON:
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const message = {
+  guildId: "100", author: { id: "312345678901234567" },
+  reply: (text) => console.log(text), // local adapter; no Discord client or network
+};
 const xp = db.table(`guild:${message.guildId}`).leaderboard("xp");
 xp.add(message.author.id, 15); // atomic, even when several shards award XP
 const top10 = xp.top(10);
@@ -296,6 +324,7 @@ await message.reply(
   top10.map(({ member, score, rank }) => `${rank}. <@${member}> — ${score} XP`).join("\n") +
   `\nYou are #${xp.rank(message.author.id)}!`
 );
+db.close();
 ```
 
 | `Leaderboard` method | Returns | |
@@ -322,12 +351,19 @@ Allow a burst of **3 uses per 10 seconds**, then refill smoothly at one use ever
 10/3 seconds. GCRA stores one arrival time per key; denied calls consume nothing.
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo(":memory:");
+const message = {
+  author: { id: "312345678901234567" },
+  reply: (text) => console.log(text), // local adapter; no Discord client or network
+};
 const result = db.rateLimit(`daily:${message.author.id}`, { limit: 3, window: 10_000 });
 if (!result.allowed) {
   await message.reply(`Slow down! Try again in ${result.retryAfter} ms.`);
 } else {
   await message.reply(`Command accepted. ${result.remaining} uses left.`);
 }
+db.close();
 ```
 
 `RateLimitResult` is `{ allowed, remaining, retryAfter, resetAfter }`: `remaining`
@@ -369,19 +405,24 @@ Writable opens perform the same purge; no background timers are used.
 ## Backups
 
 ```js
+import { Depo } from "depo.db";
+const db = new Depo("backup-source.sqlite");
+db.set("prefix", "!");
 // ESM top-level await, or inside an async function in CommonJS:
-await db.backup("bot-backup.sqlite");
+await db.backup("bot-backup-api.sqlite");
 db.close();
 ```
 
 ```sh
-npx depo backup bot.sqlite --to bot-backup.sqlite
+npx depo backup backup-source.sqlite --to bot-backup-cli.sqlite
 ```
+
+The API and CLI examples use different fresh targets so they can run in order.
 
 The built-in SQLite online-backup API includes committed WAL data and every
 namespace, leaderboard, rate-limit row and metadata record. A `table()` view
 still backs up the **whole file**. Reopen the completed backup with
-`new Depo("bot-backup.sqlite")`; to restore it as the live database, stop the old
+`new Depo("bot-backup-api.sqlite")`; to restore it as the live database, stop the old
 connection first. TTLs keep their absolute deadlines, not fresh durations.
 
 Unlike ordinary native methods, `backup()` returns a promise. **Await it before
@@ -428,13 +469,15 @@ operations) are in [docs/compat-quickdb.md](docs/compat-quickdb.md).
 ## `depo migrate`: move data to the native API
 
 ```sh
-npx depo migrate databases/db.json --to bot.sqlite                 # wio.db
-npx depo migrate croxydb/croxydb.json --from croxydb --to bot.sqlite  # croxydb, keeps TTLs
-npx depo migrate json.sqlite --to bot.sqlite                        # quick.db, all tables
+npx depo migrate databases/db.json --to from-wio.sqlite                 # wio.db
+npx depo migrate croxydb/croxydb.json --from croxydb --to from-croxy.sqlite  # croxydb, keeps TTLs
+npx depo migrate json.sqlite --to from-quick.sqlite                      # quick.db, all tables
 ```
 
+Each source gets its own target. Illustrative output from the first command:
+
 ```
-databases/db.json (wio) -> bot.sqlite
+databases/db.json (wio) -> from-wio.sqlite
   databases/db.json -> namespace "default": read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
 ```
@@ -503,6 +546,21 @@ is better; libraries at their default settings.
 
 ```sh
 npm install
+```
+
+Repository development uses the real legacy engines as **devDependencies** for
+compatibility tests and benchmarks. Unlike installing `depo.db` in an app, this
+can require native build tools. If npm reports that `better-sqlite3` install
+scripts are blocked, approve that dev dependency locally before running tests:
+
+```sh
+npm install-scripts approve better-sqlite3
+npm rebuild better-sqlite3 --foreground-scripts
+```
+
+Then run the development commands:
+
+```sh
 npm test           # build + full test suite (node:test)
 npm run typecheck  # tsc strict, no emit
 npm run smoke      # pack, install into a scratch project, run ESM/CJS/TypeScript consumers
@@ -510,6 +568,10 @@ npm run attw       # check package exports/types with @arethetypeswrong/cli
 npm run bench      # benchmark, rewrites docs/benchmark.md
 npm run fixtures   # regenerate test/fixtures with the real wio.db, quick.db, croxydb
 ```
+
+`node scripts/readme.mjs` executes every JavaScript fence in this README, the
+Turkish README and `llms.txt` independently as ESM and CommonJS against the built
+public package. Each run gets a fresh working directory; no bot client is needed.
 
 Design decisions and their reasons: [docs/decisions.md](docs/decisions.md).
 

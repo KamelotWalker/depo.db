@@ -15,6 +15,8 @@
 - Prefix queries now include keys continuing with U+10FFFF and correctly handle the surrogate gap when computing the range boundary.
 - Native async transaction callbacks are rejected before they can run, preventing writes after an `await` from escaping a transaction that has already been rejected.
 - Migration rejects a destination that aliases its source (including hard links/symlinks), instead of adding native tables to the original quick.db file.
+- README (English/Turkish) and `llms.txt` JavaScript examples are standalone, close their connections, and use non-colliding backup/migration destinations. Every JavaScript fence is exercised independently as both ESM and CommonJS during `npm test`.
+- Clarified that repository compatibility tests/benchmarks use native dev dependencies and may need local npm install-script approval; installing `depo.db` in an application remains native-addon-free.
 
 ### Compatibility
 
