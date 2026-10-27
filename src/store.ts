@@ -1,3 +1,4 @@
+import { backupDatabase } from "./backup.js";
 import { DepoError } from "./errors.js";
 import { Connection, type ConnectionOptions, type SqliteDatabase, type SqliteStatement } from "./sqlite.js";
 import type { LeaderboardEntry } from "./leaderboard.js";
@@ -28,6 +29,7 @@ export class Store {
   readonly path: string;
   readonly #conn: Connection;
   #closed = false;
+  #pendingBackups = 0;
 
   readonly #selectRow: SqliteStatement;
   readonly #upsert: SqliteStatement;
@@ -172,6 +174,7 @@ export class Store {
 
   close(): void {
     if (this.#closed) return;
+    if (this.#pendingBackups > 0) throw new DepoError("Cannot close the database while a backup is pending; await backup() first");
     this.#closed = true;
     this.#conn.close();
   }
@@ -186,6 +189,19 @@ export class Store {
   transaction<T>(fn: () => T): T {
     if (this.#closed) throw new DepoError("The database is closed");
     return this.#conn.transaction(fn);
+  }
+
+  /** Copies the whole connection, including namespaces outside this view. */
+  async backup(target: string): Promise<void> {
+    if (this.#closed) throw new DepoError("The database is closed");
+    if (this.#conn.db.isTransaction) throw new DepoError("Cannot back up inside a transaction; call backup() after the transaction finishes");
+    if (typeof target === "string") assertWellFormed("Backup target", target);
+    this.#pendingBackups++;
+    try {
+      await backupDatabase(this.#conn.db, target);
+    } finally {
+      this.#pendingBackups--;
+    }
   }
 
   getMeta(key: string): string | undefined {

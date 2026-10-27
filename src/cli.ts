@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { Depo } from "./depo.js";
 import { DepoError } from "./errors.js";
 import { runMigration, type MigrationReport, type SourceFormat } from "./migrate.js";
 import { VERSION } from "./version.js";
 
 const USAGE = `Usage: depo migrate <source> [options]
+       depo backup <source> --to <target>
 
 Imports a wio.db or croxydb JSON file, or a quick.db SQLite file, into a Depo
 SQLite file. Safe to run repeatedly: entries already present with the same
 value are counted as unchanged.
 
-Options:
+Migration options:
   --from <format>     wio | croxydb | quickdb. Default: quickdb for SQLite files,
                       wio for anything else. Use croxydb to carry over TTLs from
                       the <name>.ttl.json sidecar.
@@ -23,6 +25,14 @@ Options:
                       them and report them as conflicts.
   --dry-run           Report what would change without writing anything.
   --json              Print the report as JSON.
+
+Backup:
+  --to <file>         Required new target file. Never overwrites existing files.
+                      Copies the whole database, including all namespaces,
+                      TTLs, leaderboards and rate limits. Source is read-only.
+                      The parent directory must already exist.
+
+General:
   -h, --help          Show this help.
   -v, --version       Show the version.`;
 
@@ -53,10 +63,11 @@ function formatReport(report: MigrationReport): string {
   return lines.join("\n");
 }
 
-function main(argv: string[]): number {
-  const { values, positionals } = parseArgs({
+async function main(argv: string[]): Promise<number> {
+  const { values, positionals, tokens } = parseArgs({
     args: argv,
     allowPositionals: true,
+    tokens: true,
     options: {
       from: { type: "string" },
       to: { type: "string" },
@@ -78,9 +89,35 @@ function main(argv: string[]): number {
     console.log(USAGE);
     return values.help ? 0 : 1;
   }
-  if (command !== "migrate") throw new DepoError(`Unknown command ${JSON.stringify(command)}. Run depo --help.`);
+  if (command !== "migrate" && command !== "backup") throw new DepoError(`Unknown command ${JSON.stringify(command)}. Run depo --help.`);
   if (source === undefined) throw new DepoError("Missing <source> file. Run depo --help.");
   if (extra.length > 0) throw new DepoError(`Unexpected arguments: ${extra.join(" ")}`);
+  if (command === "backup") {
+    const migrationOnly = ["from", "namespace", "table", "overwrite", "dry-run", "json"];
+    for (const token of tokens) {
+      if (token.kind === "option" && migrationOnly.includes(token.name)) {
+        throw new DepoError(`--${token.name} is only supported by migrate, not backup`);
+      }
+    }
+    if (values.to === undefined) throw new DepoError("Backup requires --to <target>. Run depo --help.");
+    if (source.trim().length === 0 || source === ":memory:") throw new DepoError("Backup source must be an existing SQLite file, not an empty path or :memory:");
+    let db: Depo;
+    try {
+      db = new Depo(source, { readOnly: true });
+    } catch (error) {
+      throw new DepoError(
+        `Cannot open backup source ${JSON.stringify(source)} read-only. Check that the source file exists and is a readable Depo database: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+    try {
+      await db.backup(values.to);
+    } finally {
+      db.close();
+    }
+    console.log(`Backed up ${source} -> ${values.to}`);
+    return 0;
+  }
   if (values.from !== undefined && !isFormat(values.from)) {
     throw new DepoError(`--from must be one of ${FORMATS.join(", ")}`);
   }
@@ -98,12 +135,12 @@ function main(argv: string[]): number {
   return 0;
 }
 
-try {
-  process.exitCode = main(process.argv.slice(2));
-} catch (error) {
+main(process.argv.slice(2)).then((code) => {
+  process.exitCode = code;
+}).catch((error: unknown) => {
   // DepoError and Node system/argument errors (they carry a `code`) are user-facing; anything else is a bug.
   const expected = error instanceof Error && (error instanceof DepoError || "code" in error);
   console.error(`depo: ${error instanceof Error ? error.message : String(error)}`);
   if (!expected && error instanceof Error && error.stack) console.error(error.stack);
   process.exitCode = 1;
-}
+});

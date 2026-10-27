@@ -52,7 +52,7 @@ export const DEFAULT_NAMESPACE = "default";
 let sharedStore: Store | undefined;
 
 /**
- * Synchronous key-value store backed by one SQLite file.
+ * SQLite-backed key-value store with synchronous data operations and asynchronous backup.
  *
  * Values are stored as JSON. Every read-modify-write method (`add`, `push`,
  * path `set`, ...) runs in an immediate transaction, so it is atomic even when
@@ -294,6 +294,15 @@ export class Depo {
    */
   transaction<T>(fn: () => T): T {
     return this.#store.transaction(fn);
+  }
+
+  /**
+   * Copies the entire database, across all namespaces, to a new SQLite file.
+   * Await completion before using the target or closing any shared table view.
+   * Existing targets and calls inside a transaction are rejected.
+   */
+  backup(target: string): Promise<void> {
+    return this.#store.backup(target);
   }
 
   /** Closes the connection. Closes every `table()` view sharing it. */
