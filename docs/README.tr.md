@@ -59,6 +59,30 @@ db.transaction(() => {                // ya hep ya hiç
 });
 ```
 
+## Çalıştırılabilir örnekler
+
+Kaynak kod deposunda bağımlılıkları kurup `npm run build` çalıştırdıktan sonra:
+
+```sh
+node examples/discord-commands.mjs              # yerel demo, bellek içi veritabanı
+node examples/discord-commands.mjs bot.sqlite   # demo verilerini sonraki çalıştırmaya saklar
+node examples/migrate-quickdb.mjs json.sqlite bot.sqlite
+```
+
+- [Discord tarzı komut işleyici](../examples/discord-commands.mjs): enjekte edilen
+  mesaj adaptörü, sunucuya özel prefix, eksi bakiyeye izin vermeyen atomik ekonomi
+  transferleri, XP sıralaması ve kalıcı cooldown'lar. Discord istemcisi, token,
+  ağ bağlantısı veya `discord.js` bağımlılığı yoktur. Güvenilir izin bilgisini ve
+  `reply()` metodunu adaptörünüz sağlar; bağlantının kapatılması ona aittir.
+- [quick.db geçişi](../examples/migrate-quickdb.mjs): gerçek ve desteklenen geçiş
+  CLI'ını çalıştırır, ardından yerel namespace örneklerini okur. Önce kaynağa
+  yazan süreçleri durdurun ve ayrı bir hedef seçin; kaynak geri dönüş kopyanızdır.
+
+Günlük ödül gece yarısında sıfırlanmaz; son kullanımdan itibaren 24 saat bekler.
+XP dakikada bir verilebilir. Discord ID'lerini string olarak tutun.
+Her iki çalıştırılabilir örnek `npm test` ile sınanır ve npm paketinde
+`node_modules/depo.db/examples/` altında bulunur.
+
 ## Neden depo.db? Sık sorulan sorular
 
 ### better-sqlite3 gerektirmeyen bir quick.db alternatifi var mı?
@@ -165,6 +189,7 @@ Yoğun yazma yapan bir servis için seçmeden önce [sınırlamalara](#sınırla
 | `rateLimit(key, { limit, window })` | `RateLimitResult` | Atomik olarak bir kullanım tüketir; `window` ms cinsindendir |
 | `resetRateLimit(key)` | `boolean` | Kullanım sınırı durumunun silinip silinmediği |
 | `transaction(fn)` | `fn`'in sonucu | Senkron `fn`, tüm yazmalar birlikte commit edilir |
+| `backup(target)` | `Promise<void>` | **Yeni** bir yola çevrimiçi tam dosya yedeği; kapatmadan önce await edin |
 | `close()` | | Bağlantıyı (ve tüm `table()` görünümlerini) kapatır |
 
 Ayrıca dışa aktarılanlar: `Leaderboard`, `DepoError` (geçersiz anahtarlarda, değerlerde ve tip
@@ -335,9 +360,12 @@ Yazılabilir açılışlarda aynı temizlik yapılır; arka planda zamanlayıcı
   bir cron script'i) güncellemeler kaybolmadan aynı dosyayı paylaşabilir;
   `test/multiprocess.test.mjs`, tek bir dosyaya yoğun işlem yapan 6 süreçle bunu kanıtlar.
 - `transaction(fn)`, birden fazla çağrıyı birlikte atomik hale getirir. `fn` içinde
-  hata fırlatılırsa her şey geri alınır.
+  hata fırlatılırsa her şey geri alınır. Callback asenkron iş başlatmamalıdır:
+  yerel `async` fonksiyonlar çağrılmadan reddedilir; diğer callback'lerin döndürdüğü
+  promise geri almaya yol açar ama önceden planlanmış işleri iptal edemez.
 - **WAL günlüğü.** Okuyucular hiçbir zaman yazıcıları beklemez. Veritabanının yanına
-  `-wal` ve `-shm` dosyaları eklenir; kullanımda olan bir veritabanını kopyalarken bunları bir arada tutun.
+  `-wal` ve `-shm` dosyaları eklenir. Bot çalışırken yalnızca ana dosyayı kopyalamayın;
+  tutarlı, tek başına kullanılabilir bir kopya için [`backup()`](#yedekler) kullanın.
 - **`synchronous: "full"` (varsayılan)**: çağrı döndükten sonra yazılan veri elektrik
   kesilse de korunur. **`"normal"`**: süreciniz çökse de korunur; ancak elektrik
   kesintisi veya işletim sistemi çökmesinden önceki son yazmalar kaybolabilir;
@@ -347,6 +375,38 @@ Yazılabilir açılışlarda aynı temizlik yapılır; arka planda zamanlayıcı
   bir süreç saniyelerce bekleyebilir; bu tür kurulumlarda `busyTimeout` değerini artırın
   ([ayrıntılar](decisions.md#7-concurrency-wal-immediate-transactions-busy-polling)).
 - Tüm süreçler aynı makinede olmalıdır (ağ sürücüleri kullanılamaz).
+
+## Yedekler
+
+```js
+// ESM'de üst seviyede veya CommonJS'te bir async fonksiyon içinde:
+await db.backup("bot-yedek.sqlite");
+db.close();
+```
+
+```sh
+npx depo backup bot.sqlite --to bot-yedek.sqlite
+```
+
+Yerleşik SQLite çevrimiçi yedekleme API'si, commit edilmiş WAL verilerini ve tüm
+namespace'leri, liderlik tablolarını, kullanım sınırlarını ve metadata kayıtlarını
+kapsar. `table()` görünümü de **dosyanın tamamını** yedekler. Tamamlanan yedeği
+`new Depo("bot-yedek.sqlite")` ile açabilirsiniz; canlı veritabanının yerine
+kullanmak için önce eski bağlantıyı durdurun. TTL'ler yeniden başlamaz; mutlak
+sona erme zamanlarını korur.
+
+Diğer yerel metotların aksine `backup()` bir promise döndürür. **Kaynağı kapatmadan
+veya hedefi kullanmadan önce await edin.** `transaction()` içinden çağırmak veya
+yedek devam ederken bağlantıyı kapatmak `DepoError` fırlatır.
+Hedef mevcut olmamalıdır (kaynak dosyanın kendisi de kullanılamaz); üst klasörler
+mevcut olmalıdır. Üzerine yazma veya eski yedekleri silme politikası uygulanmaz.
+Başarısız çağrı kendi oluşturduğu yarım dosyayı kaldırır; çökme sonrasında yarım
+dosya kalabilir, bu nedenle yalnızca başarıyla tamamlanan hedef kullanılmalıdır.
+Mevcut hedef dosyaların üzerine yazılmaz.
+
+CLI, kaynağı salt okunur açar; eksik kaynak oluşturmaz veya şemasını yükseltmez.
+Çevrimiçi yazmalar devam edebilir; tamamlanan yedek tutarlıdır ancak çağrı başladıktan
+sonraki yazmaları da içerebilir. Sürekli yoğun yazma, tamamlanmasını geciktirebilir.
 
 ## wio.db'den geçiş
 
@@ -398,6 +458,8 @@ Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
   hangi tabloların okunacağını sınırlar. Kaynak salt okunur olarak açılır.
 - croxydb: `--from croxydb` ile `croxydb.ttl.json` içindeki TTL'ler üst seviye
   anahtarlar için korunur. Şifrelenmiş croxydb dosyalarının önce şifresi çözülmelidir.
+- Ayrı bir `--to` hedefi seçin: kaynağın kendisi (hard link veya symlink ile
+  verilen aynı dosya dahil), hedef yazılabilir açılmadan önce reddedilir.
 - **Tekrar çalıştırmak güvenlidir**: aynı kayıtlar `unchanged` sayılır. Farklı bir
   değerle zaten mevcut olan kayıtlar korunur ve `conflicts` olarak raporlanır;
   `--overwrite` bunların üzerine yazar. `--dry-run`, raporu gösterir ve hedef dosyayı

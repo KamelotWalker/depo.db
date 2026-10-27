@@ -58,6 +58,30 @@ db.transaction(() => {                // all or nothing
 });
 ```
 
+## Runnable examples
+
+After installing dependencies and running `npm run build` in a source checkout:
+
+```sh
+node examples/discord-commands.mjs              # local demo, in-memory database
+node examples/discord-commands.mjs bot.sqlite   # retain demo data between runs
+node examples/migrate-quickdb.mjs json.sqlite bot.sqlite
+```
+
+- [Discord-style command handler](examples/discord-commands.mjs): injectable
+  message adapter, per-guild prefixes, atomic economy transfers without
+  overdrafts, XP rankings and persistent cooldowns. No Discord client, token,
+  network connection or `discord.js` dependency. Your adapter supplies trusted
+  permissions and `reply()`; it owns connection shutdown.
+- [quick.db migration](examples/migrate-quickdb.mjs): runs the real supported
+  migration CLI, then reads native namespace samples. Stop source writers first
+  and choose a separate target; the original remains your rollback copy.
+
+The daily reward uses a rolling 24-hour cooldown, not a calendar-midnight reset;
+XP can be awarded once per minute. Keep Discord IDs as strings.
+Both executable examples are exercised by `npm test` and included in the npm
+package under `node_modules/depo.db/examples/`.
+
 ## Why depo.db? Frequently asked questions
 
 ### What is a quick.db alternative without better-sqlite3?
@@ -163,6 +187,7 @@ loop. See [limitations](#limitations) before choosing it for a write-heavy servi
 | `rateLimit(key, { limit, window })` | `RateLimitResult` | Atomically consume one use; `window` in ms |
 | `resetRateLimit(key)` | `boolean` | Whether rate-limit state was removed |
 | `transaction(fn)` | `fn`'s result | Synchronous `fn`, all writes commit together |
+| `backup(target)` | `Promise<void>` | Online whole-file backup to a **new** path; await before closing |
 | `close()` | | Closes the connection (and all `table()` views) |
 
 Also exported: `Leaderboard`, `DepoError` (thrown for invalid keys, values and type
@@ -326,9 +351,12 @@ Writable opens perform the same purge; no background timers are used.
   can share one file without losing updates; `test/multiprocess.test.mjs` proves
   it with 6 processes hammering one file.
 - `transaction(fn)` makes several calls atomic together. Throwing inside `fn`
-  rolls everything back.
+  rolls everything back. Callbacks must not start asynchronous work: native
+  `async` functions are rejected before invocation; other returned promises
+  cause rollback but cannot cancel work the callback already scheduled.
 - **WAL journal.** Readers never wait for writers. Adds `-wal` and `-shm` files
-  next to the database; keep them together when copying a live database.
+  next to the database. Do not copy just the main file while a bot is running;
+  use [`backup()`](#backups) for a consistent standalone copy.
 - **`synchronous: "full"` (default)**: once a call returns, the write survives
   a power cut. **`"normal"`**: survives a crash of your process, but the last
   writes before a power cut or OS crash can be lost; the file is never
@@ -337,6 +365,37 @@ Writable opens perform the same purge; no background timers are used.
   5000) with `database is locked`. Many processes writing non-stop can make one
   wait seconds; raise `busyTimeout` for such setups ([details](docs/decisions.md#7-concurrency-wal-immediate-transactions-busy-polling)).
 - All processes must be on the same machine (no network drives).
+
+## Backups
+
+```js
+// ESM top-level await, or inside an async function in CommonJS:
+await db.backup("bot-backup.sqlite");
+db.close();
+```
+
+```sh
+npx depo backup bot.sqlite --to bot-backup.sqlite
+```
+
+The built-in SQLite online-backup API includes committed WAL data and every
+namespace, leaderboard, rate-limit row and metadata record. A `table()` view
+still backs up the **whole file**. Reopen the completed backup with
+`new Depo("bot-backup.sqlite")`; to restore it as the live database, stop the old
+connection first. TTLs keep their absolute deadlines, not fresh durations.
+
+Unlike ordinary native methods, `backup()` returns a promise. **Await it before
+closing the source or using the target.** Calling it inside `transaction()` or
+closing a connection while its backup is pending throws `DepoError`.
+The destination must not exist (including the source itself); parent directories
+must exist. No overwrite/retention policy is applied. A failed call removes its
+new partial file; a crash can leave one, so only a successful completion certifies
+the destination. Existing target files are never overwritten.
+
+The CLI opens the source read-only, without creating a missing source or
+upgrading its schema. Online writes may continue; a completed backup is
+consistent, but may include writes made after the call began. Heavy continuous
+writing can delay completion.
 
 ## Migrating from wio.db
 
@@ -388,6 +447,8 @@ Total: read 11, inserted 11, updated 0, unchanged 0, conflicts 0
   which tables are read. The source is opened read-only.
 - croxydb: with `--from croxydb` TTLs from `croxydb.ttl.json` are kept for
   top-level keys. Encrypted croxydb files must be decrypted first.
+- Choose a separate `--to` destination: the source itself (including hard-link
+  or symlink aliases) is rejected before opening a writable destination.
 - **Safe to run again**: identical entries count as `unchanged`. Entries that
   already exist with a different value are kept and reported as `conflicts`;
   `--overwrite` replaces them. `--dry-run` shows the report and leaves the

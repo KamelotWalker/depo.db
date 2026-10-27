@@ -99,6 +99,8 @@ make transactions impossible to reason about (an `await` inside a transaction
 would let other code run while the write lock is held). The quick.db
 compatibility layer keeps quick.db's async signatures on top of the same
 synchronous core.
+The exception is online `backup()` (§21), whose built-in SQLite primitive is
+asynchronous; it must be awaited outside transactions.
 
 ## 7. Concurrency: WAL, immediate transactions, busy polling
 
@@ -175,6 +177,8 @@ back and is rethrown. Nested calls use savepoints, so a caught inner failure
 only undoes the inner part. A callback returning a promise is rolled back and
 rejected with an error: the transaction would otherwise commit before the
 promise settles.
+Native async callbacks are now rejected before invocation (§22); ordinary
+callbacks returning a thenable are still rejected after rollback.
 
 ## 11. Compatibility layers
 
@@ -466,4 +470,59 @@ gap with a smaller, immediately useful surface.
 - No new default page limit: `all()` keeps its existing unlimited default;
   `keys()` follows it. Callers explicitly choose a bounded `limit`. Zero yields
   an empty page; negative/fractional limits and malformed Unicode cursors fail.
+
+## 21. Online SQLite backups, not another export format (0.3.0)
+
+Chosen before implementation on 2026-10-27: add `await db.backup(target)` and
+`depo backup <source> --to <target>`. A bot owner needs a recoverable copy while
+WAL writers are active; copying only the main file can silently omit committed
+data. This clears the user-value bar after pagination. JSON export loses
+namespaces, absolute TTLs, scores, rate limits and metadata unless Depo invents
+another versioned format. SQLite's built-in online backup already preserves
+the complete database without a runtime dependency or schema change.
+
+- Back up the entire file, including all namespaces and feature tables, even
+  when called through a `table()` view. The result reopens directly with Depo;
+  restoration means opening that file after stopping the old connection.
+- `backup()` is deliberately asynchronous because `node:sqlite` exposes its
+  online-backup primitive as a promise. Await completion before using the
+  destination or closing the source. Reject calls inside `transaction()`;
+  exporting uncommitted changes is not a supported contract.
+- Never overwrite an existing destination, including the source itself.
+  Reserve a new target exclusively before handing it to SQLite, and remove
+  only the newly created target after an ordinary failure. A crash can leave
+  an incomplete target: only a successfully fulfilled call certifies a backup.
+  No overwrite flag, implicit directory creation or retention policy.
+- The CLI opens its source read-only, never creates a missing source or upgrades
+  its schema, and closes it after the backup settles. Both CLI and API preserve
+  absolute expiry timestamps; time continues to pass while a backup is stored.
+- Online backup yields a consistent completed database, not a promise that it
+  reflects exactly the instant the call began. Concurrent writes may be
+  included and sustained writers can lengthen the operation.
+
+## 22. Reject native async transaction callbacks before invoking them
+
+The synchronous transaction contract must fail before calling a native async
+function. Merely detecting its returned promise rolls back the synchronous
+prefix, but the function resumes after its first `await` and can write outside
+the already-aborted transaction. A thrown async callback also creates a rejected
+promise that its caller cannot observe through `transaction()`'s synchronous
+error. `node:util.types.isAsyncFunction` identifies native async callbacks before
+any lock, callback side effect or promise exists, including nested transactions.
+
+Keep the returned-thenable check as well: an ordinary function can return a
+promise. There is no general way to cancel arbitrary work it already scheduled;
+callbacks must not start asynchronous work at all. No promise swallowing,
+background transaction context or retry of user callbacks is introduced.
+
+## 23. A migration destination must not alias its source
+
+The source connection being read-only does not protect a quick.db file when
+`--to` names that same file: the destination connection would still open it
+writable and add Depo's tables. Reject same-file source/target pairs before
+reading or opening either database, including hard-link and symbolic-link
+aliases identified by filesystem device/inode identity. Dry runs reject the
+same invalid destination instead of previewing a migration a real run refuses.
+The error directs users to choose a separate `--to` path; ordinary migration
+idempotence/conflict rules are unchanged.
 

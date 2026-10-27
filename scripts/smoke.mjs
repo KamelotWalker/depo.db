@@ -5,7 +5,7 @@
 //   npm run build && npm run smoke
 import assert from "node:assert/strict";
 import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -58,6 +58,7 @@ await q.add("coins", 5);
 const w = new JsonDatabase({ databasePath: "esm-wio.json" });
 w.add("coins", 5);
 console.log("esm", db.get("user.1.name"), db.get("coins"), await q.get("coins"), w.get("coins"));
+await db.backup("esm-backup.sqlite");
 db.close(); q.driver.close(); w.close();
 `,
 );
@@ -89,6 +90,7 @@ const { JsonDatabase } = require("depo.db/wiodb");
   const w = new JsonDatabase({ databasePath: "cjs-wio.json" });
   w.push("list", 1);
   console.log("cjs", JSON.stringify(db.get("list")), JSON.stringify(await q.get("list")), JSON.stringify(w.get("list")));
+  await db.backup("cjs-backup.sqlite");
   db.close(); q.driver.close(); w.close();
 })();
 `,
@@ -112,11 +114,12 @@ const top: LeaderboardEntry[] = board.top(10);
 const rateOptions: RateLimitOptions = { limit: 3, window: 10_000 };
 const result: RateLimitResult = db.rateLimit("command.user.1", rateOptions);
 const reset: boolean = db.resetRateLimit("command.user.1");
+const backup: Promise<void> = db.backup("typed-backup.sqlite");
 const q = new QuickDB<number>({ driver: new MemoryDriver() });
 const p: Promise<number | null> = q.get("x");
 const w = new JsonDatabase<number>({ databasePath: "x.json" });
 const rows: Schema<number>[] = w.all();
-export { n, entries, keys, p, rows, score, rank, top, result, reset, DepoError };
+export { n, entries, keys, backup, p, rows, score, rank, top, result, reset, DepoError };
 `,
 );
 
@@ -124,6 +127,15 @@ console.log(run(process.execPath, ["esm.mjs"], app).trim());
 console.log(run(process.execPath, ["cjs.cjs"], app).trim());
 assert.match(npm(["exec", "--offline", "--", "depo", "--help"], app), /^Usage: depo migrate <source>/);
 console.log("depo --help ok");
+
+const examples = join(app, "node_modules", "depo.db", "examples");
+assert.match(run(process.execPath, [join(examples, "discord-commands.mjs")], app), /Daily reward/);
+copyFileSync(join(root, "test", "fixtures", "quickdb", "json.sqlite"), join(app, "example-quick.sqlite"));
+const migrated = JSON.parse(run(process.execPath, [
+  join(examples, "migrate-quickdb.mjs"), "example-quick.sqlite", "example-native.sqlite",
+], app));
+assert.equal(migrated.report.total.inserted, 9);
+console.log("packaged examples ok: Discord-style handler and quick.db migration");
 
 const tsc = join(root, "node_modules", "typescript", "bin", "tsc");
 for (const [module, moduleResolution] of [
