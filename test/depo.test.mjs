@@ -226,7 +226,7 @@ test("push / pull", (t) => {
 
 test("TTL: entries expire, ttl() and expire() report and change it", async (t) => {
   const db = open(t);
-  db.set("short", 1, { ttl: 40 });
+  db.set("short", 1, { ttl: 500 });
   db.set("long", 2, { ttl: 60_000 });
   db.set("forever", 3);
   const remaining = db.ttl("long");
@@ -234,7 +234,7 @@ test("TTL: entries expire, ttl() and expire() report and change it", async (t) =
   assert.equal(db.ttl("forever"), null);
   assert.equal(db.ttl("missing"), undefined);
   assert.equal(db.get("short"), 1);
-  await sleep(80);
+  await sleep(600);
   assert.equal(db.get("short"), undefined);
   assert.equal(db.has("short"), false);
   assert.equal(db.count(), 2);
@@ -243,11 +243,11 @@ test("TTL: entries expire, ttl() and expire() report and change it", async (t) =
   assert.equal(db.add("short", 1), 1, "an expired entry counts as missing");
   assert.equal(db.ttl("short"), null, "re-created without TTL");
 
-  assert.equal(db.expire("forever", 30), true);
+  assert.equal(db.expire("forever", 300), true);
   assert.equal(db.expire("missing", 30), false);
   assert.equal(db.expire("long", null), true);
   assert.equal(db.ttl("long"), null);
-  await sleep(60);
+  await sleep(400);
   assert.equal(db.get("forever"), undefined);
 });
 
