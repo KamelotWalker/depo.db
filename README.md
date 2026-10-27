@@ -15,6 +15,7 @@ over is a one-line change.
 - Dot paths into stored objects: `db.add("user.42.coins", 10)`
 - TTL per entry, namespaces, multi-key transactions
 - Indexed leaderboards for XP/economy rankings and smooth-refill command rate limits
+- Bounded keyset pagination and key-only reads without decoding JSON values
 - Atomic across processes: several bot shards can share one file
 - `depo migrate` CLI to import wio.db, croxydb and quick.db data
 
@@ -71,7 +72,8 @@ db.transaction(() => {                // all or nothing
 | `set(key, value, { ttl? })` | `value` | `ttl` in ms, whole entries only |
 | `has(key)` | `boolean` | A stored `null` counts |
 | `delete(key)` | `boolean` | Whether something was removed |
-| `all({ prefix?, limit? })` | `{ key, value }[]` | Ordered by key |
+| `all({ prefix?, limit?, after? })` | `{ key, value }[]` | Ordered by key; `after` is exclusive |
+| `keys({ prefix?, limit?, after? })` | `string[]` | Same ordering/filters, without loading JSON values |
 | `count()` | `number` | Live entries in this namespace |
 | `deleteAll()` | `number` | Entries removed from this namespace; leaves leaderboards and rate limits alone |
 | `add(key, n)` / `subtract(key, n)` | `number` | Missing counts as 0 |
@@ -134,6 +136,39 @@ Values are stored as JSON: objects, arrays, strings, numbers, booleans, `null`.
 - `Date` becomes an ISO string; `NaN` and `Infinity` become `null`.
 - `get()` returns a fresh copy; changing it does not change the database.
 - `add` throws on non-numbers; `push`/`pull` throw on non-arrays.
+
+## Pagination and key-only reads
+
+Process a bounded page at a time instead of loading every user into memory:
+
+```js
+let after;
+for (;;) {
+  const page = db.all({ prefix: "user:", limit: 100, after });
+  if (page.length === 0) break;
+  for (const { key, value } of page) {
+    console.log(key, value);
+  }
+  after = page.at(-1).key;
+}
+
+// Only need names? No JSON values are loaded or parsed.
+const firstKeys = db.keys({ prefix: "user:", limit: 100 });
+const nextKeys = db.keys({ prefix: "user:", limit: 100, after: firstKeys.at(-1) });
+```
+
+`prefix` and `after` are **literal top-level entry keys**, not dot paths: pass
+the last returned key unchanged, even if it contains dots or backslashes.
+`after` is exclusive and need not exist. Ordering is SQLite BINARY (UTF-8 byte
+order), not JavaScript's default sort or locale order. Both methods return live
+entries in the current namespace; expired rows do not consume the limit.
+Omitting `limit` returns every match; `limit: 0` returns an empty array.
+Limits must be non-negative integers; cursors must be well-formed Unicode strings.
+
+Each page sees current data, not a snapshot spanning calls. Deleting/expiring a
+cursor does not skip the next key; new keys after it can appear, while inserts
+before it are not revisited. For a stable multi-page view, read all pages inside
+a synchronous `db.transaction()` (which holds the existing write lock).
 
 ## TTL
 
@@ -317,8 +352,9 @@ is better; libraries at their default settings.
 - One SQLite row per top-level key: a path read or write parses and, for writes,
   re-serialises the whole entry. Keep entries small (one per user, not one
   `users` object with everyone in it).
-- `all()` parses every entry; on 10 000 entries it is slower than wio.db's
-  single `JSON.parse` of the whole file (see benchmark). Use `prefix`/`limit`.
+- `all()` parses every returned entry; on 10 000 entries it is slower than wio.db's
+  single `JSON.parse` of the whole file (see benchmark). Use `prefix`/`limit`/`after`
+  for bounded pages, or `keys()` when values are unnecessary.
 - TTLs apply to whole entries, not paths; expiry follows the system clock.
 - Many processes writing non-stop to one file can wait seconds for the lock
   (not a fair queue); same machine only, no network file systems.

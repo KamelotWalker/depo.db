@@ -34,6 +34,8 @@ export class Store {
   readonly #deleteLive: SqliteStatement;
   readonly #selectAll: SqliteStatement;
   readonly #selectPrefix: SqliteStatement;
+  readonly #selectKeys: SqliteStatement;
+  readonly #selectPrefixKeys: SqliteStatement;
   readonly #countLive: SqliteStatement;
   readonly #deleteNamespace: SqliteStatement;
   readonly #purge: SqliteStatement;
@@ -65,13 +67,10 @@ export class Store {
       this.#deleteLive = db.prepare(
         "DELETE FROM depo_entries WHERE ns = ? AND key = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
-      this.#selectAll = db.prepare(
-        "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key LIMIT ?",
-      );
-      this.#selectPrefix = db.prepare(
-        "SELECT key, value FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?) " +
-          "AND key >= ? AND key < ? ORDER BY key LIMIT ?",
-      );
+      this.#selectAll = prepareList(db, false, false);
+      this.#selectPrefix = prepareList(db, true, false);
+      this.#selectKeys = prepareList(db, false, true);
+      this.#selectPrefixKeys = prepareList(db, true, true);
       this.#countLive = db.prepare(
         "SELECT count(*) AS n FROM depo_entries WHERE ns = ? AND (expires_at IS NULL OR expires_at > ?)",
       );
@@ -222,15 +221,26 @@ export class Store {
     return Number(this.#run(() => this.#deleteLive.run(ns, key, now)).changes) > 0;
   }
 
-  list(ns: string, now: number, prefix: string, limit: number): RawEntry[] {
+  list(ns: string, now: number, prefix: string, limit: number, after?: string): RawEntry[] {
+    return this.#list(ns, now, prefix, limit, after, false)
+      .map((row) => ({ key: String(row["key"]), value: String(row["value"]) }));
+  }
+
+  keys(ns: string, now: number, prefix: string, limit: number, after?: string): string[] {
+    return this.#list(ns, now, prefix, limit, after, true).map((row) => String(row["key"]));
+  }
+
+  #list(ns: string, now: number, prefix: string, limit: number, after: string | undefined, keysOnly: boolean) {
     assertWellFormed("Namespace", ns);
     assertWellFormed("Prefix", prefix);
-    const rows = this.#run(() =>
-      prefix === ""
-        ? this.#selectAll.all(ns, now, limit)
-        : this.#selectPrefix.all(ns, now, prefix, prefixUpperBound(prefix), limit),
-    );
-    return rows.map((row) => ({ key: String(row["key"]), value: String(row["value"]) }));
+    if (after !== undefined) assertWellFormed("after", after);
+    const upper = prefixUpperBound(prefix);
+    const statement = keysOnly
+      ? upper === undefined ? this.#selectKeys : this.#selectPrefixKeys
+      : upper === undefined ? this.#selectAll : this.#selectPrefix;
+    const parameters: Record<string, string | number | null> = { ns, now, prefix, after: after ?? null, limit };
+    if (upper !== undefined) parameters["upper"] = upper;
+    return this.#run(() => statement.all(parameters));
   }
 
   count(ns: string, now: number): number {
@@ -484,12 +494,27 @@ function assertNames(ns: string, key: string): void {
   assertWellFormed("Key", key);
 }
 
-/**
- * Exclusive upper bound for keys starting with `prefix` under SQLite's BINARY
- * collation (UTF-8 byte order): `prefix` followed by U+10FFFF, the largest code
- * point. Keys that continue the prefix with U+10FFFF itself (a noncharacter that
- * does not occur in real keys) fall outside the range.
- */
-function prefixUpperBound(prefix: string): string {
-  return prefix + "\u{10FFFF}";
+/** The smallest well-formed string above every UTF-8 BINARY prefix match. */
+function prefixUpperBound(prefix: string): string | undefined {
+  for (let end = prefix.length; end > 0;) {
+    const last = prefix.charCodeAt(end - 1);
+    const start = end - (last >= 0xdc00 && last <= 0xdfff ? 2 : 1);
+    const point = prefix.codePointAt(start)!;
+    if (point < 0x10ffff) {
+      const next = point === 0xd7ff ? 0xe000 : point + 1;
+      return prefix.slice(0, start) + String.fromCodePoint(next);
+    }
+    end = start;
+  }
+  return undefined;
+}
+
+function prepareList(db: SqliteDatabase, bounded: boolean, keysOnly: boolean): SqliteStatement {
+  return db.prepare(
+    `SELECT ${keysOnly ? "key" : "key, value"} FROM depo_entries ` +
+      "WHERE ns = $ns AND key >= max($prefix, coalesce($after, $prefix)) " +
+      "AND key IS NOT $after " +
+      (bounded ? "AND key < $upper " : "") +
+      "AND (expires_at IS NULL OR expires_at > $now) ORDER BY key LIMIT $limit",
+  );
 }

@@ -20,6 +20,8 @@ export interface AllOptions {
   prefix?: string;
   /** Maximum number of entries to return. */
   limit?: number;
+  /** Exclusive literal entry key from the previous page (not a dot path). */
+  after?: string;
 }
 
 export interface Entry<T = unknown> {
@@ -167,17 +169,18 @@ export class Depo {
     return removed;
   }
 
-  /** Returns all live entries of this namespace, ordered by key. */
+  /** Returns live entries ordered by SQLite BINARY key order, optionally after a literal key. */
   all<T = unknown>(options: AllOptions = {}): Entry<T>[] {
-    const prefix = options.prefix ?? "";
-    const limit = options.limit ?? -1;
-    if (typeof prefix !== "string") throw new DepoError("prefix must be a string");
-    if (options.limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
-      throw new DepoError("limit must be a non-negative integer");
-    }
+    const { prefix, limit, after } = listOptions(options);
     return this.#store
-      .list(this.namespace, Date.now(), prefix, limit)
+      .list(this.namespace, Date.now(), prefix, limit, after)
       .map((entry) => ({ key: entry.key, value: decode(entry.value, entry.key) as T }));
+  }
+
+  /** Returns live literal entry keys without loading or decoding their JSON values. */
+  keys(options: AllOptions = {}): string[] {
+    const { prefix, limit, after } = listOptions(options);
+    return this.#store.keys(this.namespace, Date.now(), prefix, limit, after);
   }
 
   /** Number of live entries in this namespace. */
@@ -344,6 +347,18 @@ function assertNamespace(namespace: string): void {
 function assertRateLimitKey(key: string): void {
   if (typeof key !== "string" || key.length === 0) throw new DepoError("Rate-limit key must be a non-empty string");
   assertWellFormed("Rate-limit key", key);
+}
+
+function listOptions(options: AllOptions): { prefix: string; limit: number; after: string | undefined } {
+  const prefix = options.prefix ?? "";
+  const limit = options.limit ?? -1;
+  const after = options.after;
+  if (typeof prefix !== "string") throw new DepoError("prefix must be a string");
+  if (options.limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+    throw new DepoError("limit must be a non-negative integer");
+  }
+  if (after !== undefined && typeof after !== "string") throw new DepoError("after must be a string");
+  return { prefix, limit: Math.min(limit, Number.MAX_SAFE_INTEGER), after };
 }
 
 /**

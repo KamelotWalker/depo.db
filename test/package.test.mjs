@@ -28,6 +28,8 @@ test("every entry point loads through the exports map in ESM and CJS", async () 
     const db = new mod.Depo(":memory:");
     db.set("k", 1);
     assert.equal(db.add("k", 1), 2);
+    assert.deepEqual(db.keys({ limit: 1 }), ["k"]);
+    assert.deepEqual(db.all({ after: "k" }), []);
     db.close();
   }
   for (const mod of [await import("depo.db/quickdb"), require("depo.db/quickdb")]) {

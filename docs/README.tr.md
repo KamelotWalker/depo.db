@@ -15,6 +15,7 @@ mevcut kodunuzla doğrudan uyumlu giriş noktaları var; geçiş için tek satı
 - Saklanan nesnelere noktalı path ile erişim: `db.add("user.42.coins", 10)`
 - Kayıt başına TTL, namespace'ler, birden fazla anahtarı kapsayan transaction'lar
 - XP/ekonomi sıralamaları için indeksli liderlik tabloları ve kademeli yenilenen komut kullanım sınırları
+- Sınırlı boyutlu anahtar tabanlı sayfalama ve JSON değerlerini ayrıştırmadan anahtar okuma
 - Süreçler arasında atomik işlemler: birden fazla bot shard'ı aynı dosyayı paylaşabilir
 - wio.db, croxydb ve quick.db verilerini içe aktarmak için `depo migrate` CLI'ı
 
@@ -71,7 +72,8 @@ db.transaction(() => {                // ya hep ya hiç
 | `set(key, value, { ttl? })` | `value` | `ttl` ms cinsindendir, yalnızca bütün kayıtlara uygulanır |
 | `has(key)` | `boolean` | Saklanan `null` da var sayılır |
 | `delete(key)` | `boolean` | Bir şey silinip silinmediği |
-| `all({ prefix?, limit? })` | `{ key, value }[]` | Anahtara göre sıralı |
+| `all({ prefix?, limit?, after? })` | `{ key, value }[]` | Anahtara göre sıralı; `after` anahtarı dahil edilmez |
+| `keys({ prefix?, limit?, after? })` | `string[]` | Aynı sıralama/filtreler; JSON değerlerini yüklemez |
 | `count()` | `number` | Bu namespace'teki süresi dolmamış kayıtlar |
 | `deleteAll()` | `number` | Bu namespace'ten silinen kayıtlar; liderlik tablolarına ve kullanım sınırlarına dokunmaz |
 | `add(key, n)` / `subtract(key, n)` | `number` | Yoksa 0 kabul edilir |
@@ -135,6 +137,41 @@ Değerler JSON olarak saklanır: nesneler, diziler, string'ler, sayılar, boolea
 - `Date`, ISO string'ine; `NaN` ve `Infinity`, `null` değerine dönüşür.
 - `get()` yeni bir kopya döndürür; bunu değiştirmek veritabanını değiştirmez.
 - `add`, sayı olmayan değerlerde; `push`/`pull`, dizi olmayan değerlerde hata fırlatır.
+
+## Sayfalama ve yalnızca anahtar okuma
+
+Tüm kullanıcıları belleğe yüklemek yerine belirli boyutlu sayfalarla işleyin:
+
+```js
+let after;
+for (;;) {
+  const page = db.all({ prefix: "user:", limit: 100, after });
+  if (page.length === 0) break;
+  for (const { key, value } of page) {
+    console.log(key, value);
+  }
+  after = page.at(-1).key;
+}
+
+// Yalnızca adlar mı gerekli? JSON değerleri yüklenmez veya ayrıştırılmaz.
+const firstKeys = db.keys({ prefix: "user:", limit: 100 });
+const nextKeys = db.keys({ prefix: "user:", limit: 100, after: firstKeys.at(-1) });
+```
+
+`prefix` ve `after`, noktalı path değil, **gerçek üst seviye kayıt anahtarlarıdır**:
+son dönen anahtarı nokta veya ters eğik çizgi içerse bile değiştirmeden kullanın.
+`after` anahtarı sonuca dahil edilmez ve veritabanında hâlâ bulunması gerekmez.
+Sıralama SQLite BINARY düzenindedir (UTF-8 bayt sırası); JavaScript'in varsayılan
+veya dile özgü sıralaması değildir. Her iki metot da mevcut namespace'teki süresi
+dolmamış kayıtları döndürür; süresi dolan satırlar `limit` değerini tüketmez.
+`limit` verilmezse tüm eşleşmeler döner; `limit: 0` boş dizi döndürür.
+Limit negatif olmayan tam sayı, imleç ise geçerli Unicode string'i olmalıdır.
+
+Her sayfa güncel veriyi görür; çağrılar arasında ortak bir anlık görüntü yoktur.
+İmleç anahtarının silinmesi veya süresinin dolması sonraki anahtarı atlatmaz;
+imleçten sonra eklenen kayıtlar görünebilir, öncesine eklenenlere geri dönülmez.
+Sabit bir çok sayfalı görünüm için tüm sayfaları senkron `db.transaction()`
+içinde okuyun (mevcut yazma kilidi bu süre boyunca tutulur).
 
 ## TTL
 
@@ -323,8 +360,9 @@ Daha düşük değer daha iyidir; kütüphaneler varsayılan ayarlarıyla kullan
 - Her üst seviye anahtar için tek SQLite satırı: path okuma veya yazma işlemi,
   kaydın tamamını ayrıştırır ve yazma işlemlerinde yeniden serileştirir. Kayıtları
   küçük tutun (herkesi tek bir `users` nesnesine koymak yerine kullanıcı başına bir kayıt).
-- `all()`, her kaydı ayrıştırır; 10 000 kayıtta, wio.db'nin dosyanın tamamına bir
-  kez `JSON.parse` uygulamasından daha yavaştır (benchmark'a bakın). `prefix`/`limit` kullanın.
+- `all()`, dönen her kaydı ayrıştırır; 10 000 kayıtta, wio.db'nin dosyanın tamamına bir
+  kez `JSON.parse` uygulamasından daha yavaştır (benchmark'a bakın). Sınırlı sayfalar
+  için `prefix`/`limit`/`after`, değerler gerekmiyorsa `keys()` kullanın.
 - TTL'ler path'lere değil, kayıtların tamamına uygulanır; sürenin dolması sistem saatine bağlıdır.
 - Tek dosyaya durmadan yazan çok sayıda süreç, kilit için saniyelerce bekleyebilir
   (adil bir kuyruk yoktur); yalnızca aynı makine kullanılabilir, ağ dosya sistemleri kullanılamaz.

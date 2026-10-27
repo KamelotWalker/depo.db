@@ -435,3 +435,35 @@ SEARCH tied USING COVERING INDEX depo_scores_order (ns=? AND board=? AND score=?
 Neither query sorts a temporary result or scans the score table. The rank
 subqueries read only their bounded covering-index ranges.
 
+## 20. Next feature: bounded keyset pagination (0.3.0)
+
+Chosen before implementation on 2026-10-27: extend `all()` with an exclusive
+`after` key and add `keys()` with the same `AllOptions`. Bot maintenance jobs
+and small backends need to walk users/guilds without loading every JSON value
+into memory. `keys()` selects only keys; `all({ limit, after })` decodes only
+one requested page. Both reuse the existing `(ns, key)` primary key and require
+no schema changes, runtime dependencies, background tasks or compatibility-layer
+changes. Existing 0.1/0.2 files remain readable and writable.
+
+TTL, multi-key transactions and wio.db/croxydb/quick.db migration already exist;
+duplicating them adds no value. Backup/export and typed schemas are useful but
+need larger format or validation contracts. Pagination fills an existing API
+gap with a smaller, immediately useful surface.
+
+- `after` is the last returned **literal entry key**, not a dot path, offset or
+  opaque token. It need not still exist. Omit it for the first page; stop when
+  a call returns an empty array. Prefixes are literal too.
+- Ordering is SQLite BINARY (UTF-8 byte order), exactly as existing `all()`.
+  Bound parameters and primary-key range predicates implement the cursor; no
+  JavaScript sorting, offset scan, persistent cursor or long-lived iterator.
+  Prefix bounds must include every valid Unicode continuation, including
+  U+10FFFF, so pages never omit matching keys.
+- Each call reads current live entries in one statement, filtering TTLs before
+  applying the limit. Between pages, inserts after the cursor can appear;
+  inserts before it are not revisited, and deleted/expired keys disappear.
+  Use a synchronous `transaction()` for a stable multi-page view when needed,
+  accepting its existing write-lock semantics.
+- No new default page limit: `all()` keeps its existing unlimited default;
+  `keys()` follows it. Callers explicitly choose a bounded `limit`. Zero yields
+  an empty page; negative/fractional limits and malformed Unicode cursors fail.
+

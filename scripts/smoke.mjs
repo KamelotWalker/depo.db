@@ -43,6 +43,8 @@ import { JsonDatabase } from "depo.db/wiodb";
 const db = new Depo("esm.sqlite");
 db.set("user.1.name", "Ayşe");
 db.add("coins", 5);
+assert.deepEqual(db.keys({ after: "coins", limit: 1 }), ["user"]);
+assert.deepEqual(db.all({ prefix: "coins", limit: 1 }), [{ key: "coins", value: 5 }]);
 const board = db.leaderboard("xp");
 assert.ok(board instanceof Leaderboard);
 assert.equal(board.add("user.1", 10), 10);
@@ -68,6 +70,8 @@ const { JsonDatabase } = require("depo.db/wiodb");
 (async () => {
   const db = new Depo("cjs.sqlite");
   db.push("list", 1, 2);
+  assert.deepEqual(db.keys({ prefix: "list", limit: 1 }), ["list"]);
+  assert.deepEqual(db.all({ after: "list", limit: 1 }), []);
   const board = db.leaderboard("xp");
   assert.ok(board instanceof Leaderboard);
   assert.equal(board.set("user.1", 10), 10);
@@ -91,14 +95,16 @@ const { JsonDatabase } = require("depo.db/wiodb");
 );
 writeFileSync(
   join(app, "consumer.ts"),
-  `import { Depo, DepoError, Leaderboard, escapeKey, type Entry, type Key, type DepoOptions, type LeaderboardEntry, type RateLimitOptions, type RateLimitResult } from "depo.db";
+  `import { Depo, DepoError, Leaderboard, escapeKey, type Entry, type Key, type AllOptions, type DepoOptions, type LeaderboardEntry, type RateLimitOptions, type RateLimitResult } from "depo.db";
 import { QuickDB, MemoryDriver } from "depo.db/quickdb";
 import { JsonDatabase, type Schema } from "depo.db/wiodb";
 const options: DepoOptions = { synchronous: "normal" };
 const db = new Depo(":memory:", options);
 const key: Key = ["a", escapeKey("b.c")];
 const n: number = db.add(key, 1);
-const entries: Entry<number>[] = db.all<number>();
+const pageOptions: AllOptions = { prefix: "user:", limit: 100, after: "user:1" };
+const entries: Entry<number>[] = db.all<number>(pageOptions);
+const keys: string[] = db.keys(pageOptions);
 const board: Leaderboard = db.leaderboard("xp");
 const score: number = board.add("user.1", 5);
 const rank: number | undefined = board.rank("user.1");
@@ -110,7 +116,7 @@ const q = new QuickDB<number>({ driver: new MemoryDriver() });
 const p: Promise<number | null> = q.get("x");
 const w = new JsonDatabase<number>({ databasePath: "x.json" });
 const rows: Schema<number>[] = w.all();
-export { n, entries, p, rows, score, rank, top, result, reset, DepoError };
+export { n, entries, keys, p, rows, score, rank, top, result, reset, DepoError };
 `,
 );
 
